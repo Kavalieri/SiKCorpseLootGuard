@@ -1,0 +1,149 @@
+VERSION = 1,
+
+option SiKCorpseLootGuard.EnableMod
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableMod,
+}
+
+option SiKCorpseLootGuard.EnableSpawnMenu
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableSpawnMenu,
+}
+
+option SiKCorpseLootGuard.EnableFileLog
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableFileLog,
+}
+
+option SiKCorpseLootGuard.EnableConsoleLog
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableConsoleLog,
+}
+
+option SiKCorpseLootGuard.EnablePostAnimationRecheck
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnablePostAnimationRecheck,
+}
+
+option SiKCorpseLootGuard.PostAnimationRecheckDelaySeconds
+{
+	type = integer,
+	default = 15,
+	min = 3,
+	max = 120,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_PostAnimationRecheckDelaySeconds,
+}
+
+option SiKCorpseLootGuard.EnableNearbyPlayerCheck
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableNearbyPlayerCheck,
+}
+
+option SiKCorpseLootGuard.EnableCapacityDiagnostic
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableCapacityDiagnostic,
+}
+
+option SiKCorpseLootGuard.EnableDeathContextCapture
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableDeathContextCapture,
+}
+
+option SiKCorpseLootGuard.EnableAuthenticZProbe
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableAuthenticZProbe,
+}
+
+option SiKCorpseLootGuard.EnableFallbackCapture
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_EnableFallbackCapture,
+}
+
+option SiKCorpseLootGuard.ZombieUpdateSampleRate
+{
+	type = integer,
+	default = 40,
+	min = 1,
+	max = 200,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_ZombieUpdateSampleRate,
+}
+
+option SiKCorpseLootGuard.SummaryIntervalMinutes
+{
+	type = integer,
+	default = 5,
+	min = 1,
+	max = 60,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_SummaryIntervalMinutes,
+}
+
+option SiKCorpseLootGuard.VerboseDebug
+{
+	type = boolean,
+	default = false,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_VerboseDebug,
+}
+
+option SiKCorpseLootGuard.ClientVisualScanIntervalSeconds
+{
+	type = integer,
+	default = 5,
+	min = 1,
+	max = 60,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_ClientVisualScanIntervalSeconds,
+}
+
+option SiKCorpseLootGuard.ClientVisualScanRadiusTiles
+{
+	type = integer,
+	default = 15,
+	min = 1,
+	max = 100,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_ClientVisualScanRadiusTiles,
+}
+
+option SiKCorpseLootGuard.ClientVisualScanBudgetPerTick
+{
+	type = integer,
+	default = 3,
+	min = 1,
+	max = 50,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_ClientVisualScanBudgetPerTick,
+}

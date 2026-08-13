@@ -1,0 +1,65 @@
+--[[
+	SiK Corpse Loot Guard - Configuracion
+	Autor: SiK
+	Descripcion: v0.1.0 es EXCLUSIVAMENTE diagnostica. EnableRecovery no
+	existe todavia como funcionalidad real (el modulo de reparacion se
+	construira en una v2 una vez confirmado el patron con datos reales de
+	este diagnostico) - se deja aqui documentado como intencion futura, NO
+	como interruptor funcional.
+]]
+
+require "SCLG_Sandbox"
+
+SCLG_Config = SCLG_Config or {}
+
+--- Fuente unica de verdad para la version mostrada en consola. Debe
+--- coincidir SIEMPRE con modversion en los dos mod.info (raiz y 42/) -
+--- antes se repetia el numero como string suelto en varios sitios y se
+--- desincronizaba (visto: mod.info decia 0.1.2 y la consola anunciaba
+--- v0.1.1 porque el mensaje de carga tenia el numero escrito a mano).
+SCLG_Config.MOD_VERSION = "0.2.6"
+
+--- ID de modulo para sendClientCommand/Events.OnClientCommand (telemetria
+--- ligera de cliente, ver SCLG_ClientVisualReport.lua / SCLG_Server.lua).
+--- Debe coincidir EXACTO con el "id" de mod.info.
+SCLG_Config.MOD_ID = "SiKCorpseLootGuard"
+
+--- Tiempo (ms) que se conserva una entrada "death stage" en espera de que
+--- llegue OnDeadBodySpawn (o el respaldo de escaneo la encuentre) antes de
+--- darla por perdida (el cadaver pudo no llegar a crearse, chunk
+--- descargado, etc).
+SCLG_Config.CORPSE_AUDIT_TTL_MS = 20 * 1000
+
+--- Radio (en tiles) para correlacionar un IsoDeadBody con una entrada
+--- pendiente por POSICION, cuando no se puede correlacionar por online ID
+--- (ver nota en SCLG_CorpseAudit.lua sobre getCharacterOnlineID sin
+--- confirmar en vanilla).
+SCLG_Config.CORPSE_MATCH_RADIUS_TILES = 3
+
+--- Cada cuantas llamadas a OnZombieUpdate se procesa una (resto se
+--- descartan sin coste). Valor de respaldo si SandboxVars no esta
+--- disponible todavia (ver SCLG_Sandbox.getZombieUpdateSampleRate).
+SCLG_Config.ZOMBIE_UPDATE_SAMPLE_RATE = 40
+
+--- Tiempo minimo (ms) entre dos capturas de fallback (OnZombieUpdate) del
+--- MISMO zombie, para no reescribir su snapshot en cada muestreo.
+SCLG_Config.MIN_RECAPTURE_INTERVAL_MS = 3000
+
+--- Tiempo (ms) tras el cual una entrada de la cache sin OnZombieDead
+--- asociado se considera huerfana (el zombie se alejo, se descargo el
+--- chunk, etc.) y se libera.
+SCLG_Config.ENTRY_TTL_MS = 5 * 60 * 1000
+
+--- Cada cuanto (ms) se intenta una barrida de limpieza de la cache.
+SCLG_Config.SWEEP_INTERVAL_MS = 60 * 1000
+
+--- Cada cuanto (ms) se imprime el resumen periodico de estadisticas.
+SCLG_Config.SUMMARY_INTERVAL_MS = 5 * 60 * 1000
+
+--- Delegado a SCLG_Sandbox (ver sandbox-options.txt, opcion VerboseDebug):
+--- se mantiene esta funcion como punto unico de entrada para no tener que
+--- tocar cada fichero que ya la llama.
+---@return boolean
+function SCLG_Config.enableDebug()
+	return SCLG_Sandbox.isVerboseDebug()
+end

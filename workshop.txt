@@ -1,0 +1,6 @@
+version=1
+id=3774808073
+title=SiK Corpse Loot Guard [42.20+]
+description=SiK Corpse Loot Guard [42.20+]
+tags=Build 42;Multiplayer;Misc;Addons SiK
+visibility=public

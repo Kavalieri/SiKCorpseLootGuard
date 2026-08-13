@@ -1,0 +1,193 @@
+--[[
+	SiK Corpse Loot Guard - Telemetria ligera de cliente
+	Autor: SiK
+	Descripcion: NO ejecuta logica de diagnostico propia, NO repara nada.
+	Unico proposito: leer que apariencia visual ve ESTE cliente concreto de
+	un zombie y mandarsela al servidor identificada por onlineID, para que
+	el servidor compare "lo que el jugador vio" contra "lo que el servidor
+	registro" (ver SCLG_CorpseAudit.lua, categoria CLIENT_ONLY_VISUAL).
+
+	CAMBIO IMPORTANTE (bug real confirmado con datos): antes solo se
+	reportaba en OnZombieDead. Caso real observado: el cliente SI veia el
+	zombie vestido antes de morir, pero para cuando OnZombieDead se ejecuto
+	en el CLIENTE, el modelo ya habia pasado a cadaver vacio (la
+	transicion de zombie->cadaver ya habia ocurrido visualmente) - el
+	reporte llegaba sistematicamente demasiado tarde para ese patron de
+	perdida en concreto. Ahora se reporta en 3 momentos, cada uno guardando
+	solo si aporta MAS prendas que lo ya reportado (ver
+	SCLG_CorpseAudit.reportClientVisual, mismo criterio "conservar lo mas
+	rico" que ya usa la captura de servidor):
+	  1. "preHit" - primer OnWeaponHitCharacter contra ese zombie (el
+	     momento mas fiable: el zombie sigue vivo y vestido con seguridad).
+	  2. "periodic" - respaldo muestreado de zombies cercanos sin golpe
+	     todavia (muertes por fuego, atropello, etc.), limitado en radio y
+	     frecuencia para no saturar la red en partidas grandes.
+	  3. "death" - reporte final en OnZombieDead, por si los anteriores no
+	     llegaron a dispararse (respaldo de respaldo).
+
+	Carga en cualquier proceso con isClient() true (cliente remoto Y
+	singleplayer real - en SP esto es redundante con lo que ya ve el
+	servidor local, pero inofensivo: un mensaje de red extra, sin coste
+	real).
+]]
+
+require "SCLG_Config"
+require "SCLG_Sandbox"
+require "SCLG_Snapshot"
+
+if not (isClient and isClient()) then
+	return
+end
+
+if not SCLG_Sandbox.isModEnabled() then
+	return
+end
+
+--- onlineID -> true, zombies ya reportados por golpe (evita reenviar en
+--- cada golpe sucesivo del mismo combate).
+local hitReported = {}
+--- onlineID -> true, zombies ya reportados por muestreo periodico (evita
+--- reenviar el mismo zombie sin vida nueva que aportar en cada barrido).
+local periodicReported = {}
+local lastPeriodicScanAt = 0
+
+---@return number
+local function nowMs()
+	if getTimestampMs then
+		return getTimestampMs()
+	end
+	return 0
+end
+
+---@param zombie any
+---@return number|nil
+local function onlineIdOf(zombie)
+	local okId, onlineID = pcall(function() return zombie:getOnlineID() end)
+	if okId and onlineID and onlineID >= 0 then
+		return onlineID
+	end
+	return nil
+end
+
+---@param zombie any
+---@param onlineID number
+---@param kind string "preHit"|"periodic"|"death"
+local function sendReport(zombie, onlineID, kind)
+	local types = SCLG_Snapshot.visualTypesOnly(zombie)
+	if #types == 0 then
+		return
+	end
+	local player = (getSpecificPlayer and getSpecificPlayer(0)) or (getPlayer and getPlayer())
+	if not player then
+		return
+	end
+	local okOutfit, outfitName = pcall(function() return zombie.getOutfitName and zombie:getOutfitName() end)
+	local okPersistent, persistentOutfitID = pcall(function()
+		return zombie.getPersistentOutfitID and zombie:getPersistentOutfitID()
+	end)
+	local okUser, username = pcall(function() return player:getUsername() end)
+	-- Codificado como string "|"-separado: una tabla-array anidada en el
+	-- payload de red puede perderse en la transmision (gotcha ya conocido
+	-- y documentado en GlobalStorageSiK para este mismo motor de red).
+	local ok = pcall(sendClientCommand, player, SCLG_Config.MOD_ID, "clientVisualReport", {
+		onlineID = onlineID,
+		types = table.concat(types, "|"),
+		kind = kind,
+		outfitName = (okOutfit and outfitName) and tostring(outfitName) or nil,
+		persistentOutfitID = (okPersistent and persistentOutfitID) and tostring(persistentOutfitID) or nil,
+		observedBy = (okUser and username) and tostring(username) or nil,
+	})
+	if not ok then
+		print("[SiKCorpseLootGuard] sendClientCommand (clientVisualReport) fallo")
+	end
+end
+
+---@param attacker any
+---@param victim any
+local function onWeaponHitCharacter(attacker, victim)
+	if not victim then
+		return
+	end
+	local okZombie, isZombie = pcall(function() return instanceof(victim, "IsoZombie") end)
+	if not okZombie or not isZombie then
+		return
+	end
+	local onlineID = onlineIdOf(victim)
+	if not onlineID or hitReported[onlineID] then
+		return
+	end
+	hitReported[onlineID] = true
+	sendReport(victim, onlineID, "preHit")
+end
+
+--- Muestreo de respaldo: zombies cercanos que TODAVIA no han recibido
+--- ningun golpe (por lo tanto nunca dispararon onWeaponHitCharacter) -
+--- cubre muertes por fuego, caida, atropello u otras causas sin golpe de
+--- arma. Limitado a un radio corto y a un puñado de zombies por barrida
+--- para no saturar la red en partidas con muchos jugadores/zombies.
+local function periodicScan()
+	local now = nowMs()
+	if (now - lastPeriodicScanAt) < SCLG_Sandbox.getClientVisualScanIntervalMs() then
+		return
+	end
+	lastPeriodicScanAt = now
+
+	local player = (getSpecificPlayer and getSpecificPlayer(0)) or (getPlayer and getPlayer())
+	if not player then
+		return
+	end
+	local cell = getCell and getCell()
+	if not cell or not cell.getZombieList then
+		return
+	end
+	local okList, zombies = pcall(function() return cell:getZombieList() end)
+	if not okList or not zombies then
+		return
+	end
+	local okSize, size = pcall(function() return zombies:size() end)
+	if not okSize or not size then
+		return
+	end
+	local px, py = player:getX(), player:getY()
+	local radius = SCLG_Sandbox.getClientVisualScanRadiusTiles()
+	local radius2 = radius * radius
+	local budget = SCLG_Sandbox.getClientVisualScanBudgetPerTick()
+	for i = 0, size - 1 do
+		if budget <= 0 then
+			break
+		end
+		local okGet, zombie = pcall(function() return zombies:get(i) end)
+		if okGet and zombie then
+			local onlineID = onlineIdOf(zombie)
+			if onlineID and not hitReported[onlineID] and not periodicReported[onlineID] then
+				local okPos, zx, zy = pcall(function() return zombie:getX(), zombie:getY() end)
+				if okPos then
+					local dx, dy = zx - px, zy - py
+					if (dx * dx + dy * dy) <= radius2 then
+						periodicReported[onlineID] = true
+						sendReport(zombie, onlineID, "periodic")
+						budget = budget - 1
+					end
+				end
+			end
+		end
+	end
+end
+
+---@param zombie any
+local function onZombieDead(zombie)
+	if not zombie then
+		return
+	end
+	local onlineID = onlineIdOf(zombie)
+	if not onlineID then
+		return
+	end
+	hitReported[onlineID] = nil
+	periodicReported[onlineID] = nil
+	sendReport(zombie, onlineID, "death")
+end
+
+Events.OnWeaponHitCharacter.Add(onWeaponHitCharacter)
+Events.OnZombieDead.Add(onZombieDead)
+Events.OnTick.Add(periodicScan)

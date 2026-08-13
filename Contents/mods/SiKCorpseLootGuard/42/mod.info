@@ -1,0 +1,8 @@
+name=SiK Corpse Loot Guard [42.20+]
+id=SiKCorpseLootGuard
+description=Build 42.20+ v0.2.1 (diagnostico). Registra en consola y en fichero (carpeta Zomboid/Lua/ del servidor) cuando un zombie muere y su cadaver se queda sin la ropa/objetos que llevaba encima. Modo solo-diagnostico: no crea, borra ni mueve ningun objeto. Pensado para confirmar el patron antes de construir un modo de reparacion.
+poster=poster.png
+icon=icon.png
+author=SiK
+modversion=0.2.6
+versionMin=42.19.0
