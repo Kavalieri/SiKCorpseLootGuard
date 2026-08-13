@@ -39,3 +39,6 @@ luac.out
 *.x86_64
 *.hex
 
+
+# Notas internas de trabajo (no publicas)
+CLAUDE.md
