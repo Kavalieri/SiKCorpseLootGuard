@@ -1,6 +1,0 @@
-name=SiK Corpse Loot Guard [42.20+]
-id=SiKCorpseLootGuard
-description=Build 42.20+ v0.2.1 (diagnostico). Detecta cadaveres de zombie que pierden su ropa/loot al morir (visto con Authentic Z). Solo registra, no repara todavia.
-poster=poster.png
-icon=icon.png
-author=SiK
