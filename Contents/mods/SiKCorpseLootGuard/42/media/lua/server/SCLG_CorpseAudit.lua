@@ -5,8 +5,13 @@
 	cadaver definitivo que ve el jugador es un IsoDeadBody CREADO DESPUES,
 	con su propia representacion (DeadBodyAtlas). Este modulo recoge el
 	estado DEATH calculado por SCLG_Server.lua y lo compara, mas tarde,
-	contra el IsoDeadBody real via Events.OnDeadBodySpawn (con un respaldo
-	de escaneo por si ese evento no llegara a dispararse en el servidor).
+	contra el IsoDeadBody real via Events.OnDeadBodySpawn, con un respaldo
+	de escaneo REAL (scanForUnauditedCorpses, IsoGridSquare:getDeadBodys()
+	sobre la casilla de cada muerte pendiente) por si ese evento no llegara
+	a dispararse en el servidor - CORREGIDO 2026-08-14: este comentario
+	prometia el respaldo desde el principio pero la implementacion real
+	solo tenia el evento, sin ningun escaneo; confirmado revisando el
+	codigo (no una suposicion) y ya implementado.
 
 	IMPORTANTE - APIs de IsoDeadBody SIN CONFIRMAR en vanilla (investigado
 	en el arbol de Lua vanilla de la 42.20): getCharacterOnlineID,
@@ -113,6 +118,18 @@ function SCLG_CorpseAudit.reportClientVisual(onlineID, types, extra)
 	end
 	extra = extra or {}
 	types = types or {}
+	-- Log SIEMPRE que llega un reporte (pedido explicito tras revisar el
+	-- caso onlineID=10410, 2026-08-14): antes esto guardaba en silencio y no
+	-- habia forma de saber, mirando el log, si el reporte de cliente para un
+	-- cadaver concreto habia llegado o no - solo se podia inferir por
+	-- ausencia en la linea de auditoria final. gateado por debug para no
+	-- generar ruido en partidas grandes (esto puede llegar muy a menudo).
+	if SCLG_Config.enableDebug() then
+		SCLG_Log.debug("CorpseAudit", string.format(
+			"reportClientVisual recibido | onlineID=%s kind=%s observedBy=%s types=%d outfitName=%s persistentOutfitID=%s",
+			tostring(onlineID), tostring(extra.kind), tostring(extra.observedBy), #types,
+			tostring(extra.outfitName), tostring(extra.persistentOutfitID)))
+	end
 	local existing = clientReports[onlineID]
 	if existing then
 		local existingCount = #(existing.types or {})
@@ -181,6 +198,27 @@ local function joined(list)
 	return (#(list or {}) > 0) and table.concat(list, ";") or "(ninguno)"
 end
 
+--- Numero de elementos EN COMUN entre dos listas de fullType (interseccion,
+--- ignorando cantidad/duplicados - solo nos interesa "hay algo compartido o
+--- no"). Usado para detectar cambio COMPLETO de outfit (ver categoria
+--- OUTFIT_REPLACED mas abajo) sin falsos positivos por orden distinto.
+---@param a string[]
+---@param b string[]
+---@return number
+local function overlapCount(a, b)
+	local setA = {}
+	for i = 1, #(a or {}) do
+		setA[a[i]] = true
+	end
+	local n = 0
+	for i = 1, #(b or {}) do
+		if setA[b[i]] then
+			n = n + 1
+		end
+	end
+	return n
+end
+
 --- Clasifica y registra el resultado de auditar un cadaver definitivo
 --- contra su estado previo (PRE visual + DEATH).
 ---@param entry table { pre, death, onlineID }
@@ -205,6 +243,15 @@ local function auditCorpse(entry, corpse)
 		category = "CLIENT_ONLY_VISUAL"
 	elseif preVisualCount == 0 and deathTotal == 0 and corpseTotal == 0 then
 		category = "EMPTY_POST_NO_BASELINE"
+	elseif preVisualCount > 0 and corpseVisualCount > 0 and overlapCount(entry.pre.itemVisualTypes, corpse.itemVisualTypes) == 0 then
+		-- NUEVA categoria (2026-08-14, pedida tras revisar casos reales de
+		-- zombies con outfit completamente distinto al morir sin quedar
+		-- vacios, ej. onlineID=10396/10388): el cadaver NO esta vacio, pero
+		-- ninguna prenda visual de antes de morir sigue presente despues -
+		-- el motor materializo un conjunto totalmente distinto, no solo
+		-- perdio objetos sueltos. Categoria separada de las de perdida
+		-- porque aqui no hay perdida cuantitativa, solo sustitucion.
+		category = "OUTFIT_REPLACED"
 	end
 
 	if category then
@@ -215,7 +262,7 @@ local function auditCorpse(entry, corpse)
 		-- ANTES de OnZombieDead, no durante la reconstruccion del cadaver.
 		local confirmedClientServerDesync = (#clientTypes > 0) and (preVisualCount == 0) and (corpseTotal == 0)
 		local line = string.format(
-			"category=%s onlineID=%s preVisualTypes=%s deathInventoryTypes=%s corpseInventoryTypes=%s corpseVisualTypes=%s clientVisualTypes=%s clientReportKind=%s clientOutfitName=%s clientPersistentOutfitID=%s confirmedClientServerDesync=%s",
+			"category=%s onlineID=%s preVisualTypes=%s deathInventoryTypes=%s corpseInventoryTypes=%s corpseVisualTypes=%s clientVisualTypes=%s clientReportKind=%s clientOutfitName=%s clientPersistentOutfitID=%s serverPreOutfitName=%s serverPrePersistentOutfitID=%s serverDeathOutfitName=%s serverDeathPersistentOutfitID=%s corpseOutfitName=%s confirmedClientServerDesync=%s",
 			category, tostring(entry.onlineID),
 			joined(entry.pre.itemVisualTypes), joined((function()
 				local out = {}
@@ -231,6 +278,15 @@ local function auditCorpse(entry, corpse)
 			tostring(clientReport and clientReport.kind or "?"),
 			tostring(clientReport and clientReport.outfitName or "?"),
 			tostring(clientReport and clientReport.persistentOutfitID or "?"),
+			-- Registrados AHORA (pedido explicito tras revisar el informe del
+			-- 2026-08-14): el propio SCLG_Snapshot.build ya capturaba
+			-- outfitName/persistentOutfitID del lado servidor en pre/death,
+			-- pero no se volcaban en esta linea - solo se veian los del
+			-- cliente, dejando la mitad de la comparacion "antes/despues"
+			-- invisible en el log.
+			tostring(entry.pre.outfitName), tostring(entry.pre.persistentOutfitID),
+			tostring(entry.death.outfitName), tostring(entry.death.persistentOutfitID),
+			tostring(corpse.outfitName),
 			tostring(confirmedClientServerDesync))
 		SCLG_Log.warn(category, line)
 		SCLG_FileLog.appendLoss(line)
@@ -294,8 +350,14 @@ local function logContainerCapacityInfo(body, onlineID)
 	end
 end
 
+--- Logica compartida de auditoria de un IsoDeadBody ya localizado - llamada
+--- tanto desde el evento OnDeadBodySpawn (camino normal) como desde
+--- scanForUnauditedCorpses (respaldo, ver mas abajo). Idempotente: si el
+--- cadaver ya no tiene entrada pendiente asociada (porque el evento ya lo
+--- proceso antes que el escaneo, o viceversa), no hace nada.
 ---@param body any IsoDeadBody
-local function onDeadBodySpawn(body)
+---@param sourceLabel string "event" | "scan" - solo para el log de diagnostico
+local function processDeadBody(body, sourceLabel)
 	if not body then
 		return
 	end
@@ -313,8 +375,9 @@ local function onDeadBodySpawn(body)
 	local entry, key = findPendingFor(body)
 	if not entry then
 		-- Normal y esperado para cadaveres que no seguimos (ya existian,
-		-- de otro origen, etc) - no es un fallo, solo debug.
-		SCLG_Log.debug("CorpseAudit", "OnDeadBodySpawn sin entrada pendiente correlacionada")
+		-- de otro origen, ya procesados por la otra via evento/escaneo,
+		-- etc) - no es un fallo, solo debug.
+		SCLG_Log.debug("CorpseAudit", "IsoDeadBody (" .. tostring(sourceLabel) .. ") sin entrada pendiente correlacionada")
 		return
 	end
 	pending[key] = nil
@@ -340,6 +403,65 @@ local function onDeadBodySpawn(body)
 			firstCorpse = corpse,
 			dueAt = nowMs() + (SCLG_Sandbox.getPostAnimationRecheckDelaySeconds() * 1000),
 		}
+	end
+end
+
+---@param body any IsoDeadBody
+local function onDeadBodySpawn(body)
+	processDeadBody(body, "event")
+end
+
+--- Escaneo de respaldo REAL (2026-08-14, antes solo existia como intencion
+--- en el comentario de cabecera de este fichero, sin implementacion - ver
+--- README de diagnostico): por si Events.OnDeadBodySpawn no llega a
+--- dispararse en este build/entorno (confirmable buscando el aviso "no
+--- existe en esta build" en el log al arrancar), revisa periodicamente la
+--- MISMA casilla donde murio cada zombie pendiente por si su IsoDeadBody ya
+--- existe en el mundo, usando IsoGridSquare:getDeadBodys() (API confirmada
+--- en vanilla, ver ISVehicleMenu.lua). Throttled y limitado a entradas
+--- "death stage" con un margen de espera (CORPSE_SCAN_MIN_AGE_MS) antes de
+--- intentarlo, para dar tiempo de sobra a que el evento normal actue
+--- primero si SI existe - este escaneo es la red de seguridad, no el
+--- camino principal.
+local lastScanFallbackAt = 0
+function SCLG_CorpseAudit.scanForUnauditedCorpses()
+	local now = nowMs()
+	if (now - lastScanFallbackAt) < SCLG_Config.CORPSE_SCAN_FALLBACK_INTERVAL_MS then
+		return
+	end
+	lastScanFallbackAt = now
+
+	local cell = getCell and getCell() or nil
+	if not cell or not cell.getGridSquare then
+		return
+	end
+
+	for key, entry in pairs(pending) do
+		if (now - (entry.registeredAt or 0)) >= SCLG_Config.CORPSE_SCAN_MIN_AGE_MS then
+			local okSq, square = pcall(function() return cell:getGridSquare(entry.x, entry.y, entry.z) end)
+			if okSq and square and square.getDeadBodys then
+				local okBodies, bodies = pcall(function() return square:getDeadBodys() end)
+				if okBodies and bodies then
+					local okSize, size = pcall(function() return bodies:size() end)
+					if okSize and size and size > 0 then
+						for i = 0, size - 1 do
+							local okGet, body = pcall(function() return bodies:get(i) end)
+							if okGet and body then
+								-- processDeadBody vuelve a resolver findPendingFor por su
+								-- cuenta (onlineID/posicion) - no asumimos que ESTE body
+								-- concreto es el de "entry", solo que puede haber alguno
+								-- nuevo en esta casilla que el evento no haya capturado.
+								processDeadBody(body, "scan")
+							end
+						end
+					end
+				end
+			end
+			-- Si pending[key] seguia existiendo tras processDeadBody (no se
+			-- encontro ningun IsoDeadBody real todavia en esa casilla), se deja
+			-- para el siguiente barrido - sweepIfDue() ya limpia por TTL si el
+			-- cadaver nunca llega a materializarse.
+		end
 	end
 end
 
@@ -503,10 +625,17 @@ end
 if Events.OnDeadBodySpawn then
 	Events.OnDeadBodySpawn.Add(onDeadBodySpawn)
 else
-	SCLG_Log.warn("CorpseAudit", "Events.OnDeadBodySpawn no existe en esta build - no se podra auditar el IsoDeadBody definitivo, solo el estado DEATH sobre el IsoZombie")
+	SCLG_Log.warn("CorpseAudit", "Events.OnDeadBodySpawn no existe en esta build - no se podra auditar el IsoDeadBody definitivo por evento, se depende por completo del escaneo de respaldo (scanForUnauditedCorpses)")
 end
 
 -- Motor de la recomprobacion tardia (ver SCLG_CorpseAudit.processGroundRechecks):
 -- throttled internamente a GROUND_RECHECK_SCAN_INTERVAL_MS, seguro colgarlo
 -- de OnTick pese a dispararse muy a menudo.
 Events.OnTick.Add(SCLG_CorpseAudit.processGroundRechecks)
+
+-- Escaneo de respaldo (ver SCLG_CorpseAudit.scanForUnauditedCorpses): SIEMPRE
+-- activo, no solo cuando falta el evento - da igual que OnDeadBodySpawn SI
+-- exista, este barrido es idempotente (processDeadBody no hace nada si la
+-- entrada pendiente ya se consumio) y sirve de red de seguridad adicional
+-- para cadaveres que el evento pudiera perder por cualquier otro motivo.
+Events.OnTick.Add(SCLG_CorpseAudit.scanForUnauditedCorpses)

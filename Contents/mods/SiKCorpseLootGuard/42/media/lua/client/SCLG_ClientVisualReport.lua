@@ -43,8 +43,14 @@ if not SCLG_Sandbox.isModEnabled() then
 	return
 end
 
---- onlineID -> true, zombies ya reportados por golpe (evita reenviar en
---- cada golpe sucesivo del mismo combate).
+--- onlineID -> timestamp (ms) del ultimo reporte "preHit" enviado para ese
+--- zombie - REVISADO 2026-08-14 (ver SCLG_Config.CLIENT_HIT_REPORT_MIN_INTERVAL_MS):
+--- antes esto era onlineID -> true, un guardian de una sola vez que impedia
+--- reenviar aunque el zombie siguiera recibiendo golpes. Si el unico
+--- paquete se perdia (red) o llegaba antes de que el outfit estuviera
+--- materializado, ese zombie se quedaba sin dato de cliente para siempre -
+--- caso real confirmado (onlineID=10410). Ahora se reintenta en cada golpe
+--- siempre que haya pasado el intervalo minimo desde el ultimo envio.
 local hitReported = {}
 --- onlineID -> true, zombies ya reportados por muestreo periodico (evita
 --- reenviar el mismo zombie sin vida nueva que aportar en cada barrido).
@@ -113,10 +119,15 @@ local function onWeaponHitCharacter(attacker, victim)
 		return
 	end
 	local onlineID = onlineIdOf(victim)
-	if not onlineID or hitReported[onlineID] then
+	if not onlineID then
 		return
 	end
-	hitReported[onlineID] = true
+	local now = nowMs()
+	local lastAt = hitReported[onlineID]
+	if lastAt and (now - lastAt) < SCLG_Config.CLIENT_HIT_REPORT_MIN_INTERVAL_MS then
+		return
+	end
+	hitReported[onlineID] = now
 	sendReport(victim, onlineID, "preHit")
 end
 
