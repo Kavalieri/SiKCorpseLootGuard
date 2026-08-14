@@ -436,8 +436,24 @@ function SCLG_CorpseAudit.scanForUnauditedCorpses()
 		return
 	end
 
+	-- CRASH REAL (confirmado con traza real, 2026-08-14): processDeadBody
+	-- (mas abajo) puede borrar una entrada de `pending` DISTINTA a la que el
+	-- bucle esta recorriendo ahora mismo (via el respaldo por posicion de
+	-- findPendingFor) - mutar la tabla mientras se itera con pairs() sobre
+	-- ELLA MISMA no es seguro en Kahlua (a diferencia de Lua estandar, que sí
+	-- garantiza poder borrar la clave YA visitada), y rompe el iterador:
+	-- "attempted index: registeredAt of non-table: null" en la siguiente
+	-- vuelta. Fix: sacar una foto en un array plano ANTES de tocar nada:
+	-- pending puede mutar libremente despues sin afectar a este bucle, que ya
+	-- no depende de su identidad.
+	local snapshot = {}
 	for key, entry in pairs(pending) do
-		if (now - (entry.registeredAt or 0)) >= SCLG_Config.CORPSE_SCAN_MIN_AGE_MS then
+		snapshot[#snapshot + 1] = { key = key, entry = entry }
+	end
+
+	for i = 1, #snapshot do
+		local key, entry = snapshot[i].key, snapshot[i].entry
+		if pending[key] and (now - (entry.registeredAt or 0)) >= SCLG_Config.CORPSE_SCAN_MIN_AGE_MS then
 			local okSq, square = pcall(function() return cell:getGridSquare(entry.x, entry.y, entry.z) end)
 			if okSq and square and square.getDeadBodys then
 				local okBodies, bodies = pcall(function() return square:getDeadBodys() end)
