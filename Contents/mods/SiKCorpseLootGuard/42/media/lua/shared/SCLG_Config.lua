@@ -17,12 +17,24 @@ SCLG_Config = SCLG_Config or {}
 --- antes se repetia el numero como string suelto en varios sitios y se
 --- desincronizaba (visto: mod.info decia 0.1.2 y la consola anunciaba
 --- v0.1.1 porque el mensaje de carga tenia el numero escrito a mano).
-SCLG_Config.MOD_VERSION = "0.2.8"
+SCLG_Config.MOD_VERSION = "0.2.9"
 
 --- ID de modulo para sendClientCommand/Events.OnClientCommand (telemetria
 --- ligera de cliente, ver SCLG_ClientVisualReport.lua / SCLG_Server.lua).
 --- Debe coincidir EXACTO con el "id" de mod.info.
 SCLG_Config.MOD_ID = "SiKCorpseLootGuard"
+
+--- Indica si el proceso actual es responsable de la captura y auditoria.
+--- En B42, SP real devuelve false tanto para isServer() como para isClient();
+--- por eso solo se excluye al cliente remoto puro. Esta funcion es la unica
+--- fuente de verdad para que todos los modulos server carguen con la misma
+--- matriz: dedicado=true, host=true, SP=true, cliente remoto=false.
+---@return boolean
+function SCLG_Config.isAuthoritative()
+	local client = isClient and isClient()
+	local server = isServer and isServer()
+	return not (client and not server)
+end
 
 --- Tiempo (ms) que se conserva una entrada "death stage" en espera de que
 --- llegue OnDeadBodySpawn (o el respaldo de escaneo la encuentre) antes de

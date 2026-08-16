@@ -4,5 +4,5 @@ description=Build 42.20+ v0.2.8 (diagnostico). Registra en consola y en fichero 
 poster=poster.png
 icon=icon.png
 author=SiK
-modversion=0.2.8
+modversion=0.2.9
 versionMin=42.19.0

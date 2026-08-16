@@ -40,18 +40,9 @@ require "SCLG_CorpseAudit"
 -- excluir al cliente remoto puro (isClient()=true, isServer()=false); todo
 -- lo demas (servidor dedicado, SP real con ambos false, host LAN con ambos
 -- true) es un proceso autoritativo donde SI debe correr esta logica. Este
--- mod es standalone (no depende de GlobalStorageSiK), asi que se replica la
--- misma comprobacion aqui en vez de importarla.
-local function isAuthoritativeProcess()
-	local client = isClient and isClient()
-	local server = isServer and isServer()
-	if client and not server then
-		return false
-	end
-	return true
-end
-
-if not isAuthoritativeProcess() then
+-- mod es standalone (no depende de GlobalStorageSiK); la comprobacion vive
+-- en SCLG_Config para que Server, Capture y CorpseAudit no puedan divergir.
+if not SCLG_Config.isAuthoritative() then
 	return
 end
 

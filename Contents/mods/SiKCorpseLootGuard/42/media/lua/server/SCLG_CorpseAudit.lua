@@ -35,9 +35,9 @@ require "SCLG_Log"
 require "SCLG_Snapshot"
 require "SCLG_FileLog"
 
--- Ver nota identica en SCLG_Server.lua/SCLG_Capture.lua: media/lua/server/
--- NO filtra la carga en B42, hace falta esta guarda explicita.
-if not (isServer and isServer()) then
+-- media/lua/server/ NO filtra la carga en B42. Usar la misma fuente de
+-- autoridad que el orquestador: SP real tambien debe cargar este modulo.
+if not SCLG_Config.isAuthoritative() then
 	return
 end
 
