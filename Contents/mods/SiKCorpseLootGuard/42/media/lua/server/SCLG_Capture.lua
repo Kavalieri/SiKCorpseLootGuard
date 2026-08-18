@@ -19,6 +19,7 @@
 require "SCLG_Config"
 require "SCLG_Log"
 require "SCLG_Snapshot"
+require "SCLG_Diagnostics"
 
 -- media/lua/server/ NO filtra la carga en B42. Usar la misma fuente de
 -- autoridad que el orquestador: SP real tambien debe cargar este modulo.
@@ -106,6 +107,10 @@ function SCLG_Capture.capture(zombie, reason)
 	snap.reason = reason
 
 	local existing = cache[key]
+	SCLG_Diagnostics.attachCase(snap, existing)
+	if existing and existing.lastHitWeapon and not snap.lastHitWeapon then
+		snap.lastHitWeapon = existing.lastHitWeapon
+	end
 	if existing then
 		local existingScore = snapshotScore(existing)
 		local newScore = snapshotScore(snap)
@@ -119,8 +124,10 @@ function SCLG_Capture.capture(zombie, reason)
 	cache[key] = snap
 
 	SCLG_Log.debug("Capture", "captured key=" .. key .. " reason=" .. tostring(reason)
+		.. " session=" .. tostring(snap.sessionId) .. " case=" .. tostring(snap.caseId)
 		.. " worn=" .. tostring(#snap.worn) .. " inv=" .. tostring(#snap.inventory)
-		.. " attached=" .. tostring(#snap.attached) .. " visuals=" .. tostring(#snap.itemVisualTypes))
+		.. " attached=" .. tostring(#snap.attached) .. " visuals=" .. tostring(#snap.itemVisualTypes)
+		.. " pos=" .. tostring(snap.x) .. "," .. tostring(snap.y) .. "," .. tostring(snap.z))
 end
 
 --- Sonda de hipotesis contexto de muerte (ver SCLG_Sandbox.isDeathContextCaptureEnabled):

@@ -25,15 +25,16 @@
 	  3. "death" - reporte final en OnZombieDead, por si los anteriores no
 	     llegaron a dispararse (respaldo de respaldo).
 
-	Carga en cualquier proceso con isClient() true (cliente remoto Y
-	singleplayer real - en SP esto es redundante con lo que ya ve el
-	servidor local, pero inofensivo: un mensaje de red extra, sin coste
-	real).
+	Carga solo en procesos con isClient() true: cliente remoto y cliente del
+	host. En SP real isClient() e isServer() son ambos false; alli no hace
+	falta telemetria de red porque el proceso autoritativo observa el mismo
+	zombie directamente.
 ]]
 
 require "SCLG_Config"
 require "SCLG_Sandbox"
 require "SCLG_Snapshot"
+require "SCLG_Log"
 
 if not (isClient and isClient()) then
 	return
@@ -52,10 +53,15 @@ end
 --- caso real confirmado (onlineID=10410). Ahora se reintenta en cada golpe
 --- siempre que haya pasado el intervalo minimo desde el ultimo envio.
 local hitReported = {}
---- onlineID -> true, zombies ya reportados por muestreo periodico (evita
+--- onlineID -> timestamp, zombies ya reportados por muestreo periodico (evita
 --- reenviar el mismo zombie sin vida nueva que aportar en cada barrido).
 local periodicReported = {}
+--- onlineID -> { count=number, at=number }. El resumen de sistema solo anuncia
+--- el primer estado util visto por el cliente o una mejora posterior. Los
+--- reintentos iguales siguen disponibles en DETAIL, pero no llenan la consola.
+local announcedReports = {}
 local lastPeriodicScanAt = 0
+local lastTrackingSweepAt = 0
 
 ---@return number
 local function nowMs()
@@ -80,7 +86,10 @@ end
 ---@param kind string "preHit"|"periodic"|"death"
 local function sendReport(zombie, onlineID, kind)
 	local types = SCLG_Snapshot.visualTypesOnly(zombie)
-	if #types == 0 then
+	-- Un death vacio tambien es informacion: permite distinguir en servidor
+	-- "el cliente vio 0" de "no llego ningun reporte del cliente". Los barridos
+	-- periodicos/preHit vacios se omiten para no generar trafico sin valor.
+	if #types == 0 and kind ~= "death" then
 		return
 	end
 	local player = (getSpecificPlayer and getSpecificPlayer(0)) or (getPlayer and getPlayer())
@@ -92,6 +101,7 @@ local function sendReport(zombie, onlineID, kind)
 		return zombie.getPersistentOutfitID and zombie:getPersistentOutfitID()
 	end)
 	local okUser, username = pcall(function() return player:getUsername() end)
+	local okPos, x, y, z = pcall(function() return zombie:getX(), zombie:getY(), zombie:getZ() end)
 	-- Codificado como string "|"-separado: una tabla-array anidada en el
 	-- payload de red puede perderse en la transmision (gotcha ya conocido
 	-- y documentado en GlobalStorageSiK para este mismo motor de red).
@@ -102,9 +112,51 @@ local function sendReport(zombie, onlineID, kind)
 		outfitName = (okOutfit and outfitName) and tostring(outfitName) or nil,
 		persistentOutfitID = (okPersistent and persistentOutfitID) and tostring(persistentOutfitID) or nil,
 		observedBy = (okUser and username) and tostring(username) or nil,
+		reportedAtClientMs = nowMs(),
+		x = okPos and x or nil,
+		y = okPos and y or nil,
+		z = okPos and z or nil,
 	})
 	if not ok then
-		print("[SiKCorpseLootGuard] sendClientCommand (clientVisualReport) fallo")
+		SCLG_Log.warn("ClientVisualReport", "sendClientCommand (clientVisualReport) fallo")
+	else
+		local announced = announcedReports[onlineID]
+		local shouldAnnounce = kind ~= "periodic"
+			and (not announced or #types > (announced.count or 0))
+		if shouldAnnounce then
+			SCLG_Log.info("ClientVisual", "report sent | onlineID=" .. tostring(onlineID)
+				.. " kind=" .. tostring(kind) .. " visuals=" .. tostring(#types)
+				.. " pos=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
+			announcedReports[onlineID] = { count = #types, at = nowMs() }
+		end
+		if SCLG_Config.enableDebug() then
+			SCLG_Log.debug("ClientVisualReport", "sent onlineID=" .. tostring(onlineID)
+				.. " kind=" .. tostring(kind) .. " types=" .. tostring(#types)
+				.. " pos=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
+		end
+	end
+end
+
+local function sweepTrackingIfDue(now)
+	if (now - lastTrackingSweepAt) < SCLG_Config.SWEEP_INTERVAL_MS then return end
+	lastTrackingSweepAt = now
+	local cutoff = now - SCLG_Config.CLIENT_REPORT_TRACK_TTL_MS
+	local staleHit, stalePeriodic, staleAnnounced = {}, {}, {}
+	for onlineID, reportedAt in pairs(hitReported) do
+		if reportedAt < cutoff then staleHit[#staleHit + 1] = onlineID end
+	end
+	for onlineID, reportedAt in pairs(periodicReported) do
+		if reportedAt < cutoff then stalePeriodic[#stalePeriodic + 1] = onlineID end
+	end
+	for onlineID, report in pairs(announcedReports) do
+		if (report.at or 0) < cutoff then staleAnnounced[#staleAnnounced + 1] = onlineID end
+	end
+	for i = 1, #staleHit do hitReported[staleHit[i]] = nil end
+	for i = 1, #stalePeriodic do periodicReported[stalePeriodic[i]] = nil end
+	for i = 1, #staleAnnounced do announcedReports[staleAnnounced[i]] = nil end
+	if (#staleHit > 0 or #stalePeriodic > 0) and SCLG_Config.enableDebug() then
+		SCLG_Log.debug("ClientVisualReport", "tracking sweep hit=" .. tostring(#staleHit)
+			.. " periodic=" .. tostring(#stalePeriodic))
 	end
 end
 
@@ -138,6 +190,7 @@ end
 --- para no saturar la red en partidas con muchos jugadores/zombies.
 local function periodicScan()
 	local now = nowMs()
+	sweepTrackingIfDue(now)
 	if (now - lastPeriodicScanAt) < SCLG_Sandbox.getClientVisualScanIntervalMs() then
 		return
 	end
@@ -175,7 +228,7 @@ local function periodicScan()
 				if okPos then
 					local dx, dy = zx - px, zy - py
 					if (dx * dx + dy * dy) <= radius2 then
-						periodicReported[onlineID] = true
+						periodicReported[onlineID] = now
 						sendReport(zombie, onlineID, "periodic")
 						budget = budget - 1
 					end
@@ -197,6 +250,7 @@ local function onZombieDead(zombie)
 	hitReported[onlineID] = nil
 	periodicReported[onlineID] = nil
 	sendReport(zombie, onlineID, "death")
+	announcedReports[onlineID] = nil
 end
 
 Events.OnWeaponHitCharacter.Add(onWeaponHitCharacter)

@@ -107,10 +107,24 @@ local function describeItem(item)
 	end
 	return {
 		fullType = fullType,
+		itemId = safeCall(item, "getID"),
 		bodyLocation = bodyLocation,
 		condition = safeCall(item, "getCondition"),
+		conditionMax = safeCall(item, "getConditionMax"),
 		favorite = safeCall(item, "isFavorite") == true,
 	}
+end
+
+---@param obj any
+---@return number|nil, number|nil, number|nil
+local function positionOf(obj)
+	local x, y, z = safeCall(obj, "getX"), safeCall(obj, "getY"), safeCall(obj, "getZ")
+	if x ~= nil and y ~= nil and z ~= nil then return x, y, z end
+	local square = safeCall(obj, "getSquare")
+	if square then
+		return safeCall(square, "getX"), safeCall(square, "getY"), safeCall(square, "getZ")
+	end
+	return nil, nil, nil
 end
 
 --- Devuelve el elemento en la posicion `i` (0-indexado) de una coleccion,
@@ -268,6 +282,10 @@ function SCLG_Snapshot.buildGeneric(obj, opts)
 		attached = {},
 		inventory = {},
 		itemVisualTypes = {},
+		x = nil,
+		y = nil,
+		z = nil,
+		sex = nil,
 	}
 	if not obj then
 		return snap
@@ -288,6 +306,10 @@ function SCLG_Snapshot.buildGeneric(obj, opts)
 	if opts.persistentOutfitIdMethod then
 		snap.persistentOutfitID = safeCall(obj, opts.persistentOutfitIdMethod)
 	end
+
+	snap.x, snap.y, snap.z = positionOf(obj)
+	local female = safeCall(obj, "isFemale")
+	if female ~= nil then snap.sex = female and "female" or "male" end
 
 	if opts.wornMethod then
 		local okWorn, worn = pcall(function() return obj[opts.wornMethod](obj) end)

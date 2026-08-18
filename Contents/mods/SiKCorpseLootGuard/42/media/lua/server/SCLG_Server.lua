@@ -20,7 +20,9 @@ require "SCLG_Log"
 require "SCLG_Capture"
 require "SCLG_Snapshot"
 require "SCLG_FileLog"
+require "SCLG_Diagnostics"
 require "SCLG_CorpseAudit"
+require "SCLG_RecoverySimulation"
 
 -- IMPORTANTE: en B42, la carpeta media/lua/server/ es solo organizativa -
 -- el motor carga estos ficheros en TODOS los procesos (servidor dedicado,
@@ -53,17 +55,7 @@ if not SCLG_Sandbox.isModEnabled() then
 	return
 end
 
-local stats = {
-	deathsChecked = 0,
-	snapshotsHit = 0,
-	snapshotsMissed = 0,
-	lossesDetected = 0,
-	itemsMissing = 0,
-	nakedVisualButInventoryPresent = 0,
-	visualDeltasDetected = 0,
-	emptyCorpseSuspect = 0,
-	authenticZInstanceFailures = 0,
-}
+local stats = SCLG_Diagnostics.stats()
 local lastSummaryAt = 0
 
 ---@return number
@@ -193,24 +185,26 @@ end
 
 local function writeSummaryNow()
 	lastSummaryAt = nowMs()
-	local line = string.format(
-		"snapshots=%d/%d deathsChecked=%d lossesDetected=%d itemsMissing=%d nakedVisualButInventoryPresent=%d visualDeltasDetected=%d emptyCorpseSuspect=%d authenticZInstanceFailures=%d cacheSize=%d",
-		stats.snapshotsHit, stats.snapshotsHit + stats.snapshotsMissed,
-		stats.deathsChecked, stats.lossesDetected, stats.itemsMissing,
-		stats.nakedVisualButInventoryPresent, stats.visualDeltasDetected, stats.emptyCorpseSuspect,
-		stats.authenticZInstanceFailures,
-		SCLG_Capture.cacheSize())
-	SCLG_Log.info("Summary", line)
-	SCLG_FileLog.writeSummary(line)
+	SCLG_Diagnostics.writeSummaryNow()
 end
 
 ---@param zombie any
-local function emitSummaryIfDue(zombie)
+local function emitSummaryIfDue()
 	local now = nowMs()
 	if (now - lastSummaryAt) < SCLG_Sandbox.getSummaryIntervalMs() then
 		return
 	end
 	writeSummaryNow()
+end
+
+local lastHousekeepingAt = 0
+local function onHousekeepingTick()
+	local now = nowMs()
+	if (now - lastHousekeepingAt) < 1000 then return end
+	lastHousekeepingAt = now
+	SCLG_Capture.sweepIfDue()
+	SCLG_CorpseAudit.sweepIfDue()
+	emitSummaryIfDue()
 end
 
 ---@param zombie any
@@ -221,21 +215,42 @@ local function onZombieDead(zombie)
 	stats.deathsChecked = stats.deathsChecked + 1
 
 	local pre, key = SCLG_Capture.take(zombie)
+	local post = nil
+	local snapshotFound = pre ~= nil
 	if not pre then
 		stats.snapshotsMissed = stats.snapshotsMissed + 1
-		SCLG_Log.info("Server", "onZombieDead | key=" .. tostring(key) .. " snapshotFound=false (no se pudo capturar antes de morir)")
-		writeSummaryNow()
-		return
+		post = SCLG_Snapshot.build(zombie)
+		post.capturedAt = nowMs()
+		SCLG_Diagnostics.attachCase(post, nil)
+		pre = {
+			sessionId = post.sessionId, caseId = post.caseId, capturedAt = post.capturedAt,
+			firstCapturedAt = post.capturedAt, captureCount = 0, reason = "missed",
+			onlineID = post.onlineID, outfitName = nil, persistentOutfitID = post.persistentOutfitID,
+			x = post.x, y = post.y, z = post.z, sex = post.sex,
+			worn = {}, inventory = {}, attached = {}, itemVisualTypes = {},
+		}
+		SCLG_Diagnostics.recordStage(pre, "DEATH", "SNAPSHOT_MISSED",
+			"captureKey=" .. tostring(key) .. " snapshotFound=false")
+		SCLG_Log.info("Server", "onZombieDead | session=" .. tostring(pre.sessionId)
+			.. " case=" .. tostring(pre.caseId) .. " key=" .. tostring(key)
+			.. " snapshotFound=false")
+	else
+		stats.snapshotsHit = stats.snapshotsHit + 1
+		post = SCLG_Snapshot.build(zombie)
+		post.sessionId = pre.sessionId
+		post.caseId = pre.caseId
 	end
-	stats.snapshotsHit = stats.snapshotsHit + 1
-
-	local post = SCLG_Snapshot.build(zombie)
 
 	-- Entrega el estado DEATH (este mismo `post`) al auditor de cadaver
 	-- definitivo, que lo comparara mas tarde contra el IsoDeadBody real
 	-- (Events.OnDeadBodySpawn) - el IsoZombie que auditamos aqui NO es el
 	-- objeto final que ve el jugador. Ver SCLG_CorpseAudit.lua.
 	SCLG_CorpseAudit.registerDeathStage(pre, post, zombie)
+	SCLG_Diagnostics.recordStage({ pre = pre, death = post, onlineID = post.onlineID,
+		x = post.x, y = post.y, z = post.z }, "DEATH", "DEATH_CAPTURED", string.format(
+		"snapshotFound=%s captureReason=%s captureCount=%s ageFromFirstCaptureMs=%s preVisuals=%d deathInventory=%d deathVisuals=%d",
+		tostring(snapshotFound), tostring(pre.reason), tostring(pre.captureCount), tostring(nowMs() - (pre.firstCapturedAt or nowMs())),
+		#(pre.itemVisualTypes or {}), #(post.inventory or {}), #(post.itemVisualTypes or {})))
 
 	-- fullTypes en crudo, para el log detallado (ver punto 3 del pivote:
 	-- necesitamos saber los VALORES concretos que devuelve ItemVisual, no
@@ -254,11 +269,11 @@ local function onZombieDead(zombie)
 	-- Traza detallada por CADA muerte (no solo el resumen cada 5 minutos, que
 	-- esconde demasiado durante la fase de pruebas). Bajar a debug() mas
 	-- adelante cuando el patron ya este confirmado y esto deje de hacer falta.
-	SCLG_Log.info("Server", string.format(
-		"onZombieDead | onlineID=%s snapshotFound=true preWorn=%d preInventory=%d preAttached=%d postWorn=%d postInventory=%d postAttached=%d preVisuals=%d postVisuals=%d",
-		tostring(pre.onlineID), #pre.worn, #pre.inventory, #pre.attached, #post.worn, #post.inventory, #post.attached,
+	SCLG_Log.debug("Server", string.format(
+		"onZombieDead | onlineID=%s snapshotFound=%s preWorn=%d preInventory=%d preAttached=%d postWorn=%d postInventory=%d postAttached=%d preVisuals=%d postVisuals=%d",
+		tostring(pre.onlineID), tostring(snapshotFound), #pre.worn, #pre.inventory, #pre.attached, #post.worn, #post.inventory, #post.attached,
 		#(pre.itemVisualTypes or {}), #(post.itemVisualTypes or {})))
-	SCLG_Log.info("Server", string.format(
+	SCLG_Log.debug("Server", string.format(
 		"onZombieDead types | onlineID=%s preVisualTypes=%s postVisualTypes=%s postInventoryTypes=%s",
 		tostring(pre.onlineID), visualTypesJoined(pre.itemVisualTypes), visualTypesJoined(post.itemVisualTypes),
 		fullTypesOf(post.inventory)))
@@ -315,7 +330,7 @@ local function onZombieDead(zombie)
 					"onlineID=%s fullType=%s error=%s%s (instanceItem() fallo para este item Authentic Z - misma clase de fallo confirmada en el mod CAEC para AuthenticZClothing.*, evidencia directa de la causa de la perdida)",
 					tostring(pre.onlineID), r.fullType, tostring(r.error), deathContextStr)
 				SCLG_Log.warn("AUTHENTICZ_INSTANCE_FAIL", probeLine)
-				SCLG_FileLog.appendLoss("AUTHENTICZ_INSTANCE_FAIL " .. probeLine)
+				SCLG_Diagnostics.recordSignal(pre, "DEATH", "AUTHENTICZ_INSTANCE_FAIL", probeLine, true)
 			elseif SCLG_Config.enableDebug() then
 				SCLG_Log.debug("AuthenticZProbe", "instanceItem OK para " .. r.fullType)
 			end
@@ -346,8 +361,8 @@ local function onZombieDead(zombie)
 			"onlineID=%s preVisuals=%d postVisuals=%d postInventory=%d (cadaver parece desnudo pero SI conserva objetos en inventario)",
 			tostring(pre.onlineID), preVisualCount, postVisualCount, postTotalCount)
 		SCLG_Log.warn("NAKED_VISUAL_BUT_PRESENT", visualLine)
-		SCLG_FileLog.appendLoss("NAKED_VISUAL_BUT_PRESENT " .. visualLine)
-		writeSummaryNow()
+		SCLG_Diagnostics.recordSignal(pre, "DEATH", "NAKED_VISUAL_BUT_PRESENT", visualLine, true)
+		SCLG_RecoverySimulation.evaluate({ pre = pre, death = post }, "NAKED_VISUAL_BUT_PRESENT")
 	end
 
 	-- Delta visual PARCIAL: no es perdida total ni desnudez visual, solo
@@ -372,6 +387,7 @@ local function onZombieDead(zombie)
 				tostring(pre.onlineID), preVisualCount, postVisualCount,
 				table.concat(missingVisuals, ";"), tostring(allDroppable))
 			SCLG_Log.info("VISUAL_DELTA", deltaLine)
+			SCLG_Diagnostics.recordSignal(pre, "DEATH", "VISUAL_DELTA", deltaLine, false)
 		end
 	end
 
@@ -399,8 +415,8 @@ local function onZombieDead(zombie)
 			tostring(pre.onlineID), tostring(pre.outfitName), tostring(pre.persistentOutfitID), sex,
 			math.floor(x), math.floor(y), math.floor(z), preVisualCount, preWornCount, preInvCount)
 		SCLG_Log.warn("EMPTY_CORPSE_SUSPECT", suspectLine)
-		SCLG_FileLog.appendLoss("EMPTY_CORPSE_SUSPECT " .. suspectLine)
-		writeSummaryNow()
+		SCLG_Diagnostics.recordSignal(pre, "DEATH", "EMPTY_CORPSE_SUSPECT", suspectLine, true)
+		SCLG_RecoverySimulation.evaluate({ pre = pre, death = post }, "EMPTY_CORPSE_SUSPECT")
 	end
 
 	-- BUG REAL encontrado (caso confirmado onlineID=29981: preVisuals=9,
@@ -441,8 +457,8 @@ local function onZombieDead(zombie)
 			clothingTotalLoss and " clothingTotalLoss=true" or "",
 			deathContextStr)
 		SCLG_Log.warn(lossCategory, lossLine)
-		SCLG_FileLog.appendLoss(lossLine)
-		writeSummaryNow()
+		SCLG_Diagnostics.recordSignal(pre, "DEATH", lossCategory, lossLine, true)
+		SCLG_RecoverySimulation.evaluate({ pre = pre, death = post }, lossCategory, { missing = missingAll })
 	elseif SCLG_Config.enableDebug() then
 		SCLG_Log.debug("Server", "onZombieDead sin perdidas, key=" .. tostring(key)
 			.. " preVisuals=" .. tostring(preVisualCount) .. " postTotal=" .. tostring(postTotalCount))
@@ -499,6 +515,7 @@ local function onZombieUpdate(zombie)
 end
 
 Events.OnZombieDead.Add(onZombieDead)
+Events.OnTick.Add(onHousekeepingTick)
 
 if Events.OnWeaponHitCharacter then
 	Events.OnWeaponHitCharacter.Add(onWeaponHitCharacter)
@@ -521,33 +538,64 @@ end
 --- pasando aqui, en el servidor.
 ---@param module string
 ---@param command string
+---@param player any
 ---@param args table
-local function onClientCommand(module, command, args)
+local function onClientCommand(module, command, player, args)
 	if module ~= SCLG_Config.MOD_ID then
 		return
 	end
 	if command == "clientVisualReport" then
-		if not args or not args.onlineID then
+		if type(args) ~= "table" or type(args.onlineID) ~= "number"
+			or args.onlineID < 0 or args.onlineID > 2147483647 then
+			return
+		end
+		local rawTypes = type(args.types) == "string" and args.types or ""
+		if #rawTypes > SCLG_Config.CLIENT_REPORT_MAX_BYTES then
+			SCLG_Log.warn("Network", "clientVisualReport rechazado: payload demasiado grande bytes=" .. tostring(#rawTypes))
 			return
 		end
 		local types = {}
-		if args.types and args.types ~= "" then
-			for t in string.gmatch(args.types, "[^|]+") do
+		if rawTypes ~= "" then
+			for t in string.gmatch(rawTypes, "[^|]+") do
+				if #t > SCLG_Config.CLIENT_REPORT_MAX_TYPE_BYTES
+					or #types >= SCLG_Config.CLIENT_REPORT_MAX_TYPES then
+					SCLG_Log.warn("Network", "clientVisualReport rechazado: lista/tipo fuera de limite")
+					return
+				end
 				types[#types + 1] = t
 			end
 		end
+		local allowedKinds = { preHit = true, periodic = true, death = true }
+		if not allowedKinds[args.kind] then return end
+		local observedBy = "?"
+		local observerSteamID = "?"
+		pcall(function()
+			observedBy = player and player:getUsername() or "?"
+			if player and player.getSteamID then observerSteamID = tostring(player:getSteamID()) end
+		end)
 		SCLG_CorpseAudit.reportClientVisual(args.onlineID, types, {
 			kind = args.kind,
-			outfitName = args.outfitName,
-			persistentOutfitID = args.persistentOutfitID,
-			observedBy = args.observedBy,
+			outfitName = type(args.outfitName) == "string" and args.outfitName:sub(1, 256) or nil,
+			persistentOutfitID = type(args.persistentOutfitID) == "string" and args.persistentOutfitID:sub(1, 128) or nil,
+			observedBy = tostring(observedBy),
+			observerSteamID = observerSteamID,
+			reportedAtClientMs = type(args.reportedAtClientMs) == "number" and args.reportedAtClientMs or nil,
+			x = type(args.x) == "number" and args.x or nil,
+			y = type(args.y) == "number" and args.y or nil,
+			z = type(args.z) == "number" and args.z or nil,
 		})
 	elseif command == "spawnAttempt" then
 		-- Registro de un spawn de prueba pedido desde el menu SCLG Spawn
 		-- Test (ver SCLG_SpawnHordeUI.lua) - permite comparar despues
 		-- cuantos spawns pedidos llegaron realmente a procesarse como
 		-- muerte, para investigar zombies que se piden pero no aparecen.
-		if not args then
+		if type(args) ~= "table" then
+			return
+		end
+		local access = ""
+		pcall(function() access = tostring(player and player:getAccessLevel() or ""):lower() end)
+		if access ~= "admin" and access ~= "moderator" then
+			SCLG_Log.warn("Network", "spawnAttempt rechazado: permiso insuficiente")
 			return
 		end
 		SCLG_FileLog.appendSpawn(string.format(
@@ -558,4 +606,16 @@ local function onClientCommand(module, command, args)
 end
 Events.OnClientCommand.Add(onClientCommand)
 
-SCLG_Log.info("Server", "SiK Corpse Loot Guard v" .. SCLG_Config.MOD_VERSION .. " cargado (modo diagnostico, sin reparacion). Historial en fichero: carpeta Zomboid/Lua/ del servidor -> SiKCorpseLootGuard_losses.log y SiKCorpseLootGuard_summary.log")
+SCLG_Diagnostics.setGaugeProvider(function()
+	local audit = SCLG_CorpseAudit.gauges and SCLG_CorpseAudit.gauges() or {}
+	return {
+		cacheSize = SCLG_Capture.cacheSize(),
+		pending = audit.pending,
+		clientReports = audit.clientReports,
+		rechecks = audit.rechecks,
+	}
+end)
+
+SCLG_Log.info("Server", "SiK Corpse Loot Guard v" .. SCLG_Config.MOD_VERSION
+	.. " cargado (diagnostico + simulacion DRY RUN, sin reparacion). session="
+	.. SCLG_Diagnostics.sessionId() .. " ficheros: losses, summary, cases y recovery_simulation en Zomboid/Lua")

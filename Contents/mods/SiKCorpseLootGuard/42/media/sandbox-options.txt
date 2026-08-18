@@ -24,12 +24,28 @@ option SiKCorpseLootGuard.EnableFileLog
 	translation = SiKCorpseLootGuard_EnableFileLog,
 }
 
+option SiKCorpseLootGuard.EnableRecoverySimulation
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_EnableRecoverySimulation,
+}
+
 option SiKCorpseLootGuard.EnableConsoleLog
 {
 	type = boolean,
 	default = true,
-	page = SiKCorpseLootGuard,
+	page = SiKCorpseLootGuard_Debug,
 	translation = SiKCorpseLootGuard_EnableConsoleLog,
+}
+
+option SiKCorpseLootGuard.RelayServerLogsToClients
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_RelayServerLogsToClients,
 }
 
 option SiKCorpseLootGuard.EnablePostAnimationRecheck

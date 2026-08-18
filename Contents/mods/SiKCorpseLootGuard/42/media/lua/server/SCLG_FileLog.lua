@@ -3,7 +3,7 @@
 	Autor: SiK
 	Descripcion: Ademas de la consola, guarda un historial en disco para
 	poder revisarlo mas tarde sin tener que estar pendiente en directo.
-	Dos ficheros separados (API real: getFileWriter(nombre,
+	Ficheros separados (API real: getFileWriter(nombre,
 	relativeToModData, append), confirmada en scripts vanilla, ej.
 	forageSystem.lua):
 	  - SiKCorpseLootGuard_losses.log: se abre en modo "append" y se le
@@ -11,6 +11,10 @@
 	  - SiKCorpseLootGuard_summary.log: se SOBRESCRIBE cada vez con el
 	    resumen mas reciente, para ver el estado actual de un vistazo sin
 	    tener que leer todo el historico.
+	  - SiKCorpseLootGuard_cases.log: ciclo correlacionado de todos los casos
+	    (SESSION/DEATH/CORPSE/RECHECK), incluido el resultado sin anomalías.
+	  - SiKCorpseLootGuard_recovery_simulation.log: decisiones DRY RUN; nunca
+	    contiene acciones pendientes ni implica que se haya mutado un objeto.
 	Se abre/cierra el escritor en cada llamada (los LOSS son poco
 	frecuentes) en vez de mantener un handle abierto todo el rato.
 ]]
@@ -22,6 +26,8 @@ SCLG_FileLog = SCLG_FileLog or {}
 local LOSSES_FILE = "SiKCorpseLootGuard_losses.log"
 local SUMMARY_FILE = "SiKCorpseLootGuard_summary.log"
 local SPAWNS_FILE = "SiKCorpseLootGuard_spawns.log"
+local CASES_FILE = "SiKCorpseLootGuard_cases.log"
+local RECOVERY_FILE = "SiKCorpseLootGuard_recovery_simulation.log"
 
 ---@return string
 local function timestamp()
@@ -32,20 +38,30 @@ local function timestamp()
 	return "?"
 end
 
+---@param fileName string
+---@param line string
+local function appendLine(fileName, line)
+	if not SCLG_Sandbox.isFileLogEnabled() then return end
+	local ok, writer = pcall(getFileWriter, fileName, true, true)
+	if not ok or not writer then return end
+	pcall(function() writer:write("[" .. timestamp() .. "] " .. tostring(line) .. "\r\n") end)
+	pcall(function() writer:close() end)
+end
+
 --- Añade una linea al historial de perdidas (no se borra ni se sobrescribe).
 ---@param line string
 function SCLG_FileLog.appendLoss(line)
-	if not SCLG_Sandbox.isFileLogEnabled() then
-		return
-	end
-	local ok, writer = pcall(getFileWriter, LOSSES_FILE, true, true)
-	if not ok or not writer then
-		return
-	end
-	pcall(function()
-		writer:write("[" .. timestamp() .. "] " .. line .. "\r\n")
-	end)
-	pcall(function() writer:close() end)
+	appendLine(LOSSES_FILE, line)
+end
+
+---@param line string
+function SCLG_FileLog.appendCase(line)
+	appendLine(CASES_FILE, line)
+end
+
+---@param line string
+function SCLG_FileLog.appendRecovery(line)
+	appendLine(RECOVERY_FILE, line)
 end
 
 --- Sobrescribe el fichero de resumen con el estado actual (siempre el mismo

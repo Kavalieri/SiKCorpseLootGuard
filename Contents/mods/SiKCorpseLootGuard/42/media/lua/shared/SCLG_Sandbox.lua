@@ -34,10 +34,23 @@ function SCLG_Sandbox.isFileLogEnabled()
 	return v == nil or v.EnableFileLog ~= false
 end
 
+--- Solo genera decisiones escritas. No habilita ninguna mutacion.
+---@return boolean
+function SCLG_Sandbox.isRecoverySimulationEnabled()
+	local v = vars()
+	return v == nil or v.EnableRecoverySimulation ~= false
+end
+
 ---@return boolean
 function SCLG_Sandbox.isConsoleLogEnabled()
 	local v = vars()
 	return v == nil or v.EnableConsoleLog ~= false
+end
+
+---@return boolean
+function SCLG_Sandbox.relayServerLogsToClients()
+	local v = vars()
+	return v == nil or v.RelayServerLogsToClients ~= false
 end
 
 ---@return boolean

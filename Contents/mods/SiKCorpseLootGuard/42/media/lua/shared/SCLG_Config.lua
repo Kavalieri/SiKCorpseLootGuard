@@ -1,11 +1,10 @@
 --[[
 	SiK Corpse Loot Guard - Configuracion
 	Autor: SiK
-	Descripcion: v0.1.0 es EXCLUSIVAMENTE diagnostica. EnableRecovery no
-	existe todavia como funcionalidad real (el modulo de reparacion se
-	construira en una v2 una vez confirmado el patron con datos reales de
-	este diagnostico) - se deja aqui documentado como intencion futura, NO
-	como interruptor funcional.
+	Descripcion: funcionalidad EXCLUSIVAMENTE diagnostica. La simulacion de
+	recuperacion solo clasifica evidencia y escribe un plan DRY RUN; no crea,
+	borra, mueve ni restaura objetos. Una reparacion real sigue reservada para
+	una version futura tras validar casos reproducibles e idempotentes.
 ]]
 
 require "SCLG_Sandbox"
@@ -13,11 +12,11 @@ require "SCLG_Sandbox"
 SCLG_Config = SCLG_Config or {}
 
 --- Fuente unica de verdad para la version mostrada en consola. Debe
---- coincidir SIEMPRE con modversion en los dos mod.info (raiz y 42/) -
+--- coincidir SIEMPRE con modversion en el unico mod.info de 42/ -
 --- antes se repetia el numero como string suelto en varios sitios y se
 --- desincronizaba (visto: mod.info decia 0.1.2 y la consola anunciaba
 --- v0.1.1 porque el mensaje de carga tenia el numero escrito a mano).
-SCLG_Config.MOD_VERSION = "0.2.9"
+SCLG_Config.MOD_VERSION = "0.2.10"
 
 --- ID de modulo para sendClientCommand/Events.OnClientCommand (telemetria
 --- ligera de cliente, ver SCLG_ClientVisualReport.lua / SCLG_Server.lua).
@@ -52,6 +51,11 @@ SCLG_Config.CORPSE_MATCH_RADIUS_TILES = 3
 --- SCLG_CorpseAudit.scanForUnauditedCorpses) - throttle general del barrido.
 SCLG_Config.CORPSE_SCAN_FALLBACK_INTERVAL_MS = 2000
 
+--- Maximo de muertes pendientes cuyo entorno se inspecciona en cada pase
+--- del fallback. Cada entrada puede consultar hasta (radio*2+1)^2 casillas;
+--- el cursor rotatorio de CorpseAudit evita tanto picos como inanicion.
+SCLG_Config.CORPSE_SCAN_MAX_PENDING_PER_PASS = 8
+
 --- Edad minima (ms) de una entrada "death stage" antes de que el escaneo de
 --- respaldo la considere - da tiempo de sobra a que Events.OnDeadBodySpawn
 --- actue primero si existe, para que el escaneo sea solo la red de
@@ -76,6 +80,15 @@ SCLG_Config.MIN_RECAPTURE_INTERVAL_MS = 3000
 --- intervalo desde el ultimo envio, sin llegar a saturar la red en un
 --- combate con muchos golpes seguidos.
 SCLG_Config.CLIENT_HIT_REPORT_MIN_INTERVAL_MS = 1500
+
+--- TTL de los identificadores vistos en el cliente. Evita que zombies que
+--- se descargan sin OnZombieDead dejen tablas crecientes durante horas.
+SCLG_Config.CLIENT_REPORT_TRACK_TTL_MS = 10 * 60 * 1000
+
+--- Limites defensivos del payload visual cliente -> servidor.
+SCLG_Config.CLIENT_REPORT_MAX_TYPES = 128
+SCLG_Config.CLIENT_REPORT_MAX_BYTES = 12000
+SCLG_Config.CLIENT_REPORT_MAX_TYPE_BYTES = 256
 
 --- Tiempo (ms) tras el cual una entrada de la cache sin OnZombieDead
 --- asociado se considera huerfana (el zombie se alejo, se descargo el

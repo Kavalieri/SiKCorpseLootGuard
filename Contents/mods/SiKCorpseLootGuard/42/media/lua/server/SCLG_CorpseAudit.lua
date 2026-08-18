@@ -34,6 +34,8 @@ require "SCLG_Sandbox"
 require "SCLG_Log"
 require "SCLG_Snapshot"
 require "SCLG_FileLog"
+require "SCLG_Diagnostics"
+require "SCLG_RecoverySimulation"
 
 -- media/lua/server/ NO filtra la carga en B42. Usar la misma fuente de
 -- autoridad que el orquestador: SP real tambien debe cargar este modulo.
@@ -55,8 +57,10 @@ SCLG_CorpseAudit = SCLG_CorpseAudit or {}
 local pending = {}
 --- onlineID -> { types = {...}, reportedAt = }
 local clientReports = {}
+local clientReportSequence = 0
 local lastSweepAt = 0
 local loggedCorpseApiOnce = false
+local ambiguousLoggedAt = {}
 
 --- Cola de recomprobacion tardia (ver SCLG_Sandbox.isPostAnimationRecheckEnabled):
 --- key -> { body=IsoDeadBody, onlineID=, firstCorpse=snapshot, dueAt= }.
@@ -89,11 +93,16 @@ function SCLG_CorpseAudit.registerDeathStage(pre, death, zombie)
 	pcall(function()
 		x, y, z = zombie:getX(), zombie:getY(), zombie:getZ()
 	end)
-	local key = death.onlineID and ("oid:" .. tostring(death.onlineID)) or ("pos:" .. tostring(zombie))
+	local resolvedOnlineID = death.onlineID or pre.onlineID
+	death.onlineID = resolvedOnlineID
+	local key = resolvedOnlineID and ("oid:" .. tostring(resolvedOnlineID))
+		or ("case:" .. tostring(pre.caseId or (math.floor(x) .. "," .. math.floor(y) .. "," .. math.floor(z))))
 	pending[key] = {
 		pre = pre,
 		death = death,
-		onlineID = death.onlineID,
+		sessionId = pre.sessionId,
+		caseId = pre.caseId,
+		onlineID = resolvedOnlineID,
 		x = x, y = y, z = z,
 		registeredAt = nowMs(),
 	}
@@ -111,7 +120,7 @@ end
 --- prendas vistas, igual criterio que SCLG_Capture.capture() en servidor.
 ---@param onlineID number
 ---@param types string[]
----@param extra table|nil { kind="preHit"|"death"|"periodic", outfitName, persistentOutfitID, observedBy }
+---@param extra table|nil
 function SCLG_CorpseAudit.reportClientVisual(onlineID, types, extra)
 	if not onlineID then
 		return
@@ -126,9 +135,10 @@ function SCLG_CorpseAudit.reportClientVisual(onlineID, types, extra)
 	-- generar ruido en partidas grandes (esto puede llegar muy a menudo).
 	if SCLG_Config.enableDebug() then
 		SCLG_Log.debug("CorpseAudit", string.format(
-			"reportClientVisual recibido | onlineID=%s kind=%s observedBy=%s types=%d outfitName=%s persistentOutfitID=%s",
-			tostring(onlineID), tostring(extra.kind), tostring(extra.observedBy), #types,
-			tostring(extra.outfitName), tostring(extra.persistentOutfitID)))
+			"reportClientVisual recibido | onlineID=%s kind=%s observedBy=%s steamID=%s types=%d outfitName=%s persistentOutfitID=%s clientMs=%s serverMs=%s pos=%s,%s,%s",
+			tostring(onlineID), tostring(extra.kind), tostring(extra.observedBy), tostring(extra.observerSteamID), #types,
+			tostring(extra.outfitName), tostring(extra.persistentOutfitID),
+			tostring(extra.reportedAtClientMs), tostring(nowMs()), tostring(extra.x), tostring(extra.y), tostring(extra.z)))
 	end
 	local existing = clientReports[onlineID]
 	if existing then
@@ -137,14 +147,28 @@ function SCLG_CorpseAudit.reportClientVisual(onlineID, types, extra)
 			return
 		end
 	end
+	clientReportSequence = clientReportSequence + 1
+	local receivedAt = nowMs()
+	local reportId = SCLG_Diagnostics.sessionId() .. "-CLI-" .. string.format("%06d", clientReportSequence)
 	clientReports[onlineID] = {
 		types = types,
-		reportedAt = nowMs(),
+		reportedAt = receivedAt,
+		reportId = reportId,
 		kind = extra.kind,
 		outfitName = extra.outfitName,
 		persistentOutfitID = extra.persistentOutfitID,
 		observedBy = extra.observedBy,
+		observerSteamID = extra.observerSteamID,
+		reportedAtClientMs = extra.reportedAtClientMs,
+		x = extra.x, y = extra.y, z = extra.z,
 	}
+	SCLG_Diagnostics.recordStage({
+		sessionId = SCLG_Diagnostics.sessionId(), caseId = reportId, onlineID = onlineID,
+		persistentOutfitID = extra.persistentOutfitID, x = extra.x, y = extra.y, z = extra.z,
+	}, "CLIENT", "VISUAL_REPORT_ACCEPTED", "sourceOrigin=CLI kind=" .. tostring(extra.kind)
+		.. " observedBy=" .. tostring(extra.observedBy) .. " steamID=" .. tostring(extra.observerSteamID)
+		.. " types=" .. tostring(#types) .. " clientMs=" .. tostring(extra.reportedAtClientMs)
+		.. " serverReceivedMs=" .. tostring(receivedAt))
 end
 
 ---@param a table|nil
@@ -161,12 +185,13 @@ end
 ---@param body any
 ---@return table|nil entry
 ---@return string|nil key
+---@return table correlation
 local function findPendingFor(body)
 	local okId, bodyOnlineId = pcall(function() return body.getCharacterOnlineID and body:getCharacterOnlineID() or nil end)
 	if okId and bodyOnlineId and bodyOnlineId >= 0 then
 		local key = "oid:" .. tostring(bodyOnlineId)
 		if pending[key] then
-			return pending[key], key
+			return pending[key], key, { method = "onlineID", confidence = "exact", candidates = 1, distance = 0 }
 		end
 	end
 
@@ -175,21 +200,34 @@ local function findPendingFor(body)
 	-- corta. Buscamos la entrada pendiente mas cercana dentro del radio.
 	local okSq, square = pcall(function() return body.getSquare and body:getSquare() or nil end)
 	if not okSq or not square then
-		return nil, nil
+		return nil, nil, { method = "none", confidence = "unmatched", candidates = 0 }
 	end
-	local okXY, bx, by = pcall(function() return square:getX(), square:getY() end)
+	local okXY, bx, by, bz = pcall(function() return square:getX(), square:getY(), square:getZ() end)
 	if not okXY then
-		return nil, nil
+		return nil, nil, { method = "none", confidence = "unmatched", candidates = 0 }
 	end
 	local radius = SCLG_Config.CORPSE_MATCH_RADIUS_TILES
 	local bestKey, bestEntry, bestDist = nil, nil, (radius * radius) + 1
+	local candidates = 0
 	for key, entry in pairs(pending) do
-		local d = dist2(entry, bx, by)
-		if d <= (radius * radius) and d < bestDist then
-			bestKey, bestEntry, bestDist = key, entry, d
+		if math.floor(entry.z or 0) == math.floor(bz or 0) then
+			local d = dist2(entry, bx, by)
+			if d <= (radius * radius) then
+				candidates = candidates + 1
+				if d < bestDist then bestKey, bestEntry, bestDist = key, entry, d end
+			end
 		end
 	end
-	return bestEntry, bestKey
+	if candidates == 1 then
+		return bestEntry, bestKey, { method = "position", confidence = "unique_proximity", candidates = 1,
+			distance = math.sqrt(bestDist), bodyX = bx, bodyY = by, bodyZ = bz }
+	end
+	if candidates > 1 then
+		return nil, nil, { method = "position", confidence = "ambiguous", candidates = candidates,
+			distance = math.sqrt(bestDist), bodyX = bx, bodyY = by, bodyZ = bz, nearest = bestEntry }
+	end
+	return nil, nil, { method = "position", confidence = "unmatched", candidates = 0,
+		bodyX = bx, bodyY = by, bodyZ = bz }
 end
 
 ---@param list string[]
@@ -223,7 +261,9 @@ end
 --- contra su estado previo (PRE visual + DEATH).
 ---@param entry table { pre, death, onlineID }
 ---@param corpse table snapshot de SCLG_Snapshot.buildFromCorpse
-local function auditCorpse(entry, corpse)
+---@param correlation table
+---@param sourceLabel string
+local function auditCorpse(entry, corpse, correlation, sourceLabel)
 	local preVisualCount = #(entry.pre.itemVisualTypes or {})
 	local deathTotal = #(entry.death.inventory or {})
 	local corpseTotal = #(corpse.inventory or {})
@@ -254,6 +294,26 @@ local function auditCorpse(entry, corpse)
 		category = "OUTFIT_REPLACED"
 	end
 
+	local auditDetails = string.format(
+		"source=%s correlation=%s confidence=%s candidates=%s distance=%s ageDeathToCorpseMs=%s preVisuals=%d deathInventory=%d corpseInventory=%d corpseVisuals=%d",
+		tostring(sourceLabel), tostring(correlation.method), tostring(correlation.confidence),
+		tostring(correlation.candidates), tostring(correlation.distance),
+		tostring(nowMs() - (entry.registeredAt or nowMs())), preVisualCount, deathTotal, corpseTotal, corpseVisualCount)
+	SCLG_Diagnostics.stats().corpseAudits = SCLG_Diagnostics.stats().corpseAudits + 1
+
+	-- Resumen compacto siempre visible: permite comparar lo observado por el
+	-- cliente con cada fase autoritativa sin activar el DETAIL de alto volumen.
+	-- "received + 0" es distinto de "missing + 0" y diagnostica si el cliente
+	-- vio realmente un zombie vacio o si nunca llego un reporte.
+	SCLG_Log.info("ClientServerCompare", string.format(
+		"case=%s onlineID=%s clientReport=%s clientKind=%s clientVisuals=%d serverPreVisuals=%d deathInventory=%d corpseInventory=%d corpseVisuals=%d correlation=%s confidence=%s source=%s reportId=%s observer=%s",
+		tostring(entry.caseId), tostring(entry.onlineID), clientReport and "received" or "missing",
+		tostring(clientReport and clientReport.kind or "?"), #clientTypes, preVisualCount,
+		deathTotal, corpseTotal, corpseVisualCount, tostring(correlation.method),
+		tostring(correlation.confidence), tostring(sourceLabel),
+		tostring(clientReport and clientReport.reportId or "none"),
+		tostring(clientReport and clientReport.observedBy or "unknown")))
+
 	if category then
 		-- Patron que demuestra definitivamente una perdida real (pedido
 		-- explicitamente): el cliente SI vio ropa antes de morir, el
@@ -262,8 +322,8 @@ local function auditCorpse(entry, corpse)
 		-- ANTES de OnZombieDead, no durante la reconstruccion del cadaver.
 		local confirmedClientServerDesync = (#clientTypes > 0) and (preVisualCount == 0) and (corpseTotal == 0)
 		local line = string.format(
-			"category=%s onlineID=%s preVisualTypes=%s deathInventoryTypes=%s corpseInventoryTypes=%s corpseVisualTypes=%s clientVisualTypes=%s clientReportKind=%s clientOutfitName=%s clientPersistentOutfitID=%s serverPreOutfitName=%s serverPrePersistentOutfitID=%s serverDeathOutfitName=%s serverDeathPersistentOutfitID=%s corpseOutfitName=%s confirmedClientServerDesync=%s",
-			category, tostring(entry.onlineID),
+			"%s preVisualTypes=%s deathInventoryTypes=%s corpseInventoryTypes=%s corpseVisualTypes=%s clientVisualTypes=%s clientReportId=%s clientReportKind=%s clientObservedBy=%s clientSteamID=%s clientReportedAtMs=%s clientReceivedAtMs=%s clientPos=%s,%s,%s clientOutfitName=%s clientPersistentOutfitID=%s serverPreOutfitName=%s serverPrePersistentOutfitID=%s serverDeathOutfitName=%s serverDeathPersistentOutfitID=%s corpseOutfitName=%s confirmedClientServerDesync=%s",
+			auditDetails,
 			joined(entry.pre.itemVisualTypes), joined((function()
 				local out = {}
 				for i = 1, #(entry.death.inventory or {}) do out[i] = entry.death.inventory[i].fullType or "?" end
@@ -275,7 +335,15 @@ local function auditCorpse(entry, corpse)
 				return out
 			end)()),
 			joined(corpse.itemVisualTypes), joined(clientTypes),
+			tostring(clientReport and clientReport.reportId or "?"),
 			tostring(clientReport and clientReport.kind or "?"),
+			tostring(clientReport and clientReport.observedBy or "?"),
+			tostring(clientReport and clientReport.observerSteamID or "?"),
+			tostring(clientReport and clientReport.reportedAtClientMs or "?"),
+			tostring(clientReport and clientReport.reportedAt or "?"),
+			tostring(clientReport and clientReport.x or "?"),
+			tostring(clientReport and clientReport.y or "?"),
+			tostring(clientReport and clientReport.z or "?"),
 			tostring(clientReport and clientReport.outfitName or "?"),
 			tostring(clientReport and clientReport.persistentOutfitID or "?"),
 			-- Registrados AHORA (pedido explicito tras revisar el informe del
@@ -289,11 +357,19 @@ local function auditCorpse(entry, corpse)
 			tostring(corpse.outfitName),
 			tostring(confirmedClientServerDesync))
 		SCLG_Log.warn(category, line)
-		SCLG_FileLog.appendLoss(line)
+		SCLG_Diagnostics.recordSignal(entry, "CORPSE", category, line, true)
+		SCLG_RecoverySimulation.evaluate(entry, category, {
+			correlationConfidence = correlation.confidence,
+			clientTypes = clientTypes,
+		})
 	elseif SCLG_Config.enableDebug() then
 		SCLG_Log.debug("CorpseAudit", "auditCorpse sin categoria | onlineID=" .. tostring(entry.onlineID)
 			.. " preVisuals=" .. preVisualCount .. " deathTotal=" .. deathTotal .. " corpseTotal=" .. corpseTotal)
 	end
+	if not category then
+		SCLG_Diagnostics.recordStage(entry, "CORPSE", "OK", auditDetails)
+	end
+	if entry.onlineID then clientReports[entry.onlineID] = nil end
 end
 
 --- Sonda de hipotesis capacidad/peso (ver SCLG_Sandbox.isCapacityDiagnosticEnabled):
@@ -306,8 +382,8 @@ end
 --- despues casos con perdida contra casos sin ella y ver si la capacidad
 --- estaba al limite en los primeros y no en los segundos.
 ---@param body any IsoDeadBody
----@param onlineID number|nil
-local function logContainerCapacityInfo(body, onlineID)
+---@param entry table
+local function logContainerCapacityInfo(body, entry)
 	local okContainer, container = pcall(function() return body.getContainer and body:getContainer() or nil end)
 	if not okContainer or not container then
 		return
@@ -341,10 +417,10 @@ local function logContainerCapacityInfo(body, onlineID)
 	local nearLimit = (maxWeight and weight and maxWeight > 0 and (weight / maxWeight) >= 0.9)
 	local line = string.format(
 		"onlineID=%s items=%s capacity=%s weight=%s maxWeight=%s nearLimit=%s",
-		tostring(onlineID), tostring(itemCount), tostring(capacity), tostring(weight), tostring(maxWeight), tostring(nearLimit == true))
+		tostring(entry.onlineID), tostring(itemCount), tostring(capacity), tostring(weight), tostring(maxWeight), tostring(nearLimit == true))
 	if nearLimit then
 		SCLG_Log.warn("CORPSE_CONTAINER_NEAR_CAPACITY", line)
-		SCLG_FileLog.appendLoss("CORPSE_CONTAINER_NEAR_CAPACITY " .. line)
+		SCLG_Diagnostics.recordSignal(entry, "CORPSE", "CORPSE_CONTAINER_NEAR_CAPACITY", line, true)
 	elseif SCLG_Config.enableDebug() then
 		SCLG_Log.debug("CapacityProbe", line)
 	end
@@ -372,8 +448,24 @@ local function processDeadBody(body, sourceLabel)
 			tostring(body.getSquare ~= nil)))
 	end
 
-	local entry, key = findPendingFor(body)
+	local entry, key, correlation = findPendingFor(body)
 	if not entry then
+		if correlation and correlation.confidence == "ambiguous" then
+			local ambiguityKey = tostring(correlation.bodyX) .. "," .. tostring(correlation.bodyY) .. "," .. tostring(correlation.bodyZ)
+			if not ambiguousLoggedAt[ambiguityKey] then
+				ambiguousLoggedAt[ambiguityKey] = nowMs()
+				local nearest = correlation.nearest or {
+					caseId = SCLG_Diagnostics.newCaseId(), sessionId = SCLG_Diagnostics.sessionId(),
+					x = correlation.bodyX, y = correlation.bodyY, z = correlation.bodyZ,
+				}
+				local details = "source=" .. tostring(sourceLabel) .. " correlation=position confidence=ambiguous candidates="
+					.. tostring(correlation.candidates) .. " nearestDistance=" .. tostring(correlation.distance)
+				SCLG_Diagnostics.stats().correlationAmbiguous = SCLG_Diagnostics.stats().correlationAmbiguous + 1
+				SCLG_Diagnostics.recordSignal(nearest, "CORRELATION", "AMBIGUOUS_CORPSE_MATCH", details, true)
+				SCLG_RecoverySimulation.evaluate(nearest, "AMBIGUOUS_CORPSE_MATCH")
+				SCLG_Diagnostics.writeSummaryNow()
+			end
+		end
 		-- Normal y esperado para cadaveres que no seguimos (ya existian,
 		-- de otro origen, ya procesados por la otra via evento/escaneo,
 		-- etc) - no es un fallo, solo debug.
@@ -381,12 +473,19 @@ local function processDeadBody(body, sourceLabel)
 		return
 	end
 	pending[key] = nil
+	if correlation.confidence == "exact" then
+		SCLG_Diagnostics.stats().correlationExact = SCLG_Diagnostics.stats().correlationExact + 1
+	elseif correlation.confidence == "unique_proximity" then
+		SCLG_Diagnostics.stats().correlationProximity = SCLG_Diagnostics.stats().correlationProximity + 1
+	end
 
 	local corpse = SCLG_Snapshot.buildFromCorpse(body)
-	auditCorpse(entry, corpse)
+	corpse.sessionId = entry.sessionId
+	corpse.caseId = entry.caseId
+	auditCorpse(entry, corpse, correlation, sourceLabel)
 
 	if SCLG_Sandbox.isCapacityDiagnosticEnabled() then
-		logContainerCapacityInfo(body, entry.onlineID)
+		logContainerCapacityInfo(body, entry)
 	end
 
 	-- Programa una segunda comprobacion mas tarde (ver
@@ -399,11 +498,14 @@ local function processDeadBody(body, sourceLabel)
 	if SCLG_Sandbox.isPostAnimationRecheckEnabled() then
 		groundRecheckQueue[key] = {
 			body = body,
+			entry = entry,
 			onlineID = entry.onlineID,
 			firstCorpse = corpse,
+			correlation = correlation,
 			dueAt = nowMs() + (SCLG_Sandbox.getPostAnimationRecheckDelaySeconds() * 1000),
 		}
 	end
+	SCLG_Diagnostics.writeSummaryNow()
 end
 
 ---@param body any IsoDeadBody
@@ -424,6 +526,7 @@ end
 --- primero si SI existe - este escaneo es la red de seguridad, no el
 --- camino principal.
 local lastScanFallbackAt = 0
+local fallbackScanCursor = 1
 function SCLG_CorpseAudit.scanForUnauditedCorpses()
 	local now = nowMs()
 	if (now - lastScanFallbackAt) < SCLG_Config.CORPSE_SCAN_FALLBACK_INTERVAL_MS then
@@ -451,23 +554,31 @@ function SCLG_CorpseAudit.scanForUnauditedCorpses()
 		snapshot[#snapshot + 1] = { key = key, entry = entry }
 	end
 
-	for i = 1, #snapshot do
-		local key, entry = snapshot[i].key, snapshot[i].entry
+	if #snapshot == 0 then
+		fallbackScanCursor = 1
+		return
+	end
+	if fallbackScanCursor > #snapshot then fallbackScanCursor = 1 end
+	local maxEntries = math.min(#snapshot, SCLG_Config.CORPSE_SCAN_MAX_PENDING_PER_PASS)
+	local snapshotIndex = fallbackScanCursor
+	for _ = 1, maxEntries do
+		local key, entry = snapshot[snapshotIndex].key, snapshot[snapshotIndex].entry
 		if pending[key] and (now - (entry.registeredAt or 0)) >= SCLG_Config.CORPSE_SCAN_MIN_AGE_MS then
-			local okSq, square = pcall(function() return cell:getGridSquare(entry.x, entry.y, entry.z) end)
-			if okSq and square and square.getDeadBodys then
-				local okBodies, bodies = pcall(function() return square:getDeadBodys() end)
-				if okBodies and bodies then
-					local okSize, size = pcall(function() return bodies:size() end)
-					if okSize and size and size > 0 then
-						for i = 0, size - 1 do
-							local okGet, body = pcall(function() return bodies:get(i) end)
-							if okGet and body then
-								-- processDeadBody vuelve a resolver findPendingFor por su
-								-- cuenta (onlineID/posicion) - no asumimos que ESTE body
-								-- concreto es el de "entry", solo que puede haber alguno
-								-- nuevo en esta casilla que el evento no haya capturado.
-								processDeadBody(body, "scan")
+			local radius = SCLG_Config.CORPSE_MATCH_RADIUS_TILES
+			for dx = -radius, radius do
+				for dy = -radius, radius do
+					if pending[key] then
+						local okSq, square = pcall(function()
+							return cell:getGridSquare(math.floor(entry.x) + dx, math.floor(entry.y) + dy, math.floor(entry.z))
+						end)
+						if okSq and square and square.getDeadBodys then
+							local okBodies, bodies = pcall(function() return square:getDeadBodys() end)
+							local okSize, size = pcall(function() return okBodies and bodies and bodies:size() or 0 end)
+							if okSize and size and size > 0 then
+								for bodyIndex = 0, size - 1 do
+									local okGet, body = pcall(function() return bodies:get(bodyIndex) end)
+									if okGet and body then processDeadBody(body, "scan") end
+								end
 							end
 						end
 					end
@@ -478,7 +589,10 @@ function SCLG_CorpseAudit.scanForUnauditedCorpses()
 			-- para el siguiente barrido - sweepIfDue() ya limpia por TTL si el
 			-- cadaver nunca llega a materializarse.
 		end
+		snapshotIndex = snapshotIndex + 1
+		if snapshotIndex > #snapshot then snapshotIndex = 1 end
 	end
+	fallbackScanCursor = snapshotIndex
 end
 
 --- Radio (en tiles) dentro del cual se considera que un jugador podria
@@ -493,28 +607,29 @@ local NEARBY_PLAYER_RADIUS_TILES = 3
 --- fuera el propio bug).
 ---@param x number
 ---@param y number
+---@param z number
 ---@return boolean
-local function hasNearbyPlayer(x, y)
+local function hasNearbyPlayer(x, y, z)
 	local okGetPlayers, players = pcall(function() return getOnlinePlayers() end)
-	if not okGetPlayers or not players then
-		return false
+	if not okGetPlayers then players = nil end
+	local function isNear(player)
+		if not player then return false end
+		local okPos, px, py, pz = pcall(function() return player:getX(), player:getY(), player:getZ() end)
+		if not okPos or math.floor(pz or 0) ~= math.floor(z or 0) then return false end
+		local dx, dy = px - x, py - y
+		return (dx * dx + dy * dy) <= (NEARBY_PLAYER_RADIUS_TILES * NEARBY_PLAYER_RADIUS_TILES)
+	end
+	if not players then
+		local player = (getSpecificPlayer and getSpecificPlayer(0)) or (getPlayer and getPlayer())
+		return isNear(player)
 	end
 	local okSize, size = pcall(function() return players:size() end)
 	if not okSize or not size then
 		return false
 	end
-	local radius2 = NEARBY_PLAYER_RADIUS_TILES * NEARBY_PLAYER_RADIUS_TILES
 	for i = 0, size - 1 do
 		local okP, player = pcall(function() return players:get(i) end)
-		if okP and player then
-			local okPos, px, py = pcall(function() return player:getX(), player:getY() end)
-			if okPos then
-				local dx, dy = px - x, py - y
-				if (dx * dx + dy * dy) <= radius2 then
-					return true
-				end
-			end
-		end
+		if okP and isNear(player) then return true end
 	end
 	return false
 end
@@ -533,6 +648,9 @@ local function auditGroundRecheck(queued)
 	-- despawn normal se habria contado igual que una perdida real.
 	local okSquare, square = pcall(function() return body.getSquare and body:getSquare() or nil end)
 	if not okSquare or not square then
+		SCLG_Diagnostics.recordStage(queued.entry, "RECHECK", "BODY_UNAVAILABLE",
+			"reason=despawn_or_chunk_unloaded")
+		SCLG_Diagnostics.writeSummaryNow()
 		if SCLG_Config.enableDebug() then
 			SCLG_Log.debug("CorpseAudit", "auditGroundRecheck: cadaver ya no tiene square (probable despawn/descarga de chunk), no cuenta como perdida | onlineID="
 				.. tostring(queued.onlineID))
@@ -565,8 +683,8 @@ local function auditGroundRecheck(queued)
 			for _ = 1, deficit do missing[#missing + 1] = ft end
 		end
 
-		local okXY, bx, by = pcall(function() return square:getX(), square:getY() end)
-		local nearbyPlayer = SCLG_Sandbox.isNearbyPlayerCheckEnabled() and okXY and hasNearbyPlayer(bx, by)
+		local okXY, bx, by, bz = pcall(function() return square:getX(), square:getY(), square:getZ() end)
+		local nearbyPlayer = SCLG_Sandbox.isNearbyPlayerCheckEnabled() and okXY and hasNearbyPlayer(bx, by, bz)
 
 		local line = string.format(
 			"onlineID=%s firstCheckInventory=%d nowInventory=%d firstCheckVisuals=%d nowVisuals=%d missing=%s possibleLegitimateLoot=%s",
@@ -579,14 +697,28 @@ local function auditGroundRecheck(queued)
 			-- el mismo: se registra como informativo, NO como LOSS, para no
 			-- inflar los contadores con looteo legitimo.
 			SCLG_Log.info("POST_ANIMATION_DELTA_NEARBY_PLAYER", line)
+			SCLG_Diagnostics.recordSignal(queued.entry, "RECHECK", "POST_ANIMATION_DELTA_NEARBY_PLAYER", line, false)
+			SCLG_RecoverySimulation.evaluate(queued.entry, "POST_ANIMATION_LOSS", {
+				missing = missing, possibleLegitimateLoot = true,
+			})
 		else
 			SCLG_Log.warn("POST_ANIMATION_LOSS", line)
-			SCLG_FileLog.appendLoss("POST_ANIMATION_LOSS " .. line)
+			SCLG_Diagnostics.stats().postAnimationLosses = SCLG_Diagnostics.stats().postAnimationLosses + 1
+			SCLG_Diagnostics.recordSignal(queued.entry, "RECHECK", "POST_ANIMATION_LOSS", line, true)
+			SCLG_RecoverySimulation.evaluate(queued.entry, "POST_ANIMATION_LOSS", {
+				missing = missing, possibleLegitimateLoot = false,
+			})
 		end
-	elseif SCLG_Config.enableDebug() then
-		SCLG_Log.debug("CorpseAudit", "auditGroundRecheck sin perdidas | onlineID=" .. tostring(queued.onlineID)
-			.. " firstTotal=" .. firstTotal .. " nowTotal=" .. nowTotal)
+	else
+		SCLG_Diagnostics.recordStage(queued.entry, "RECHECK", "OK",
+			"firstInventory=" .. tostring(firstTotal) .. " nowInventory=" .. tostring(nowTotal)
+			.. " firstVisuals=" .. tostring(firstVisual) .. " nowVisuals=" .. tostring(nowVisual))
+		if SCLG_Config.enableDebug() then
+			SCLG_Log.debug("CorpseAudit", "auditGroundRecheck sin perdidas | onlineID=" .. tostring(queued.onlineID)
+				.. " firstTotal=" .. firstTotal .. " nowTotal=" .. nowTotal)
+		end
 	end
+	SCLG_Diagnostics.writeSummaryNow()
 end
 
 --- Procesa la cola de recomprobacion tardia (throttled, seguro llamarla en
@@ -601,13 +733,17 @@ function SCLG_CorpseAudit.processGroundRechecks()
 		return
 	end
 	lastGroundRecheckScanAt = now
+	local due = {}
 	for key, queued in pairs(groundRecheckQueue) do
 		if now >= queued.dueAt then
-			groundRecheckQueue[key] = nil
-			local ok, err = pcall(auditGroundRecheck, queued)
-			if not ok then
-				SCLG_Log.debug("CorpseAudit", "auditGroundRecheck fallo (cadaver probablemente descargado): " .. tostring(err))
-			end
+			due[#due + 1] = { key = key, queued = queued }
+		end
+	end
+	for i = 1, #due do
+		groundRecheckQueue[due[i].key] = nil
+		local ok, err = pcall(auditGroundRecheck, due[i].queued)
+		if not ok then
+			SCLG_Log.debug("CorpseAudit", "auditGroundRecheck fallo (cadaver probablemente descargado): " .. tostring(err))
 		end
 	end
 end
@@ -621,21 +757,45 @@ function SCLG_CorpseAudit.sweepIfDue()
 	end
 	lastSweepAt = now
 	local removedPending, removedReports = 0, 0
+	local stalePending, staleReports, staleAmbiguities = {}, {}, {}
 	for key, entry in pairs(pending) do
 		if (now - (entry.registeredAt or 0)) > SCLG_Config.CORPSE_AUDIT_TTL_MS then
-			pending[key] = nil
-			removedPending = removedPending + 1
+			stalePending[#stalePending + 1] = { key = key, entry = entry }
 		end
 	end
 	for onlineID, report in pairs(clientReports) do
 		if (now - (report.reportedAt or 0)) > SCLG_Config.CORPSE_AUDIT_TTL_MS then
-			clientReports[onlineID] = nil
-			removedReports = removedReports + 1
+			staleReports[#staleReports + 1] = onlineID
 		end
 	end
+	for key, loggedAt in pairs(ambiguousLoggedAt) do
+		if (now - loggedAt) > SCLG_Config.CORPSE_AUDIT_TTL_MS then staleAmbiguities[#staleAmbiguities + 1] = key end
+	end
+	for i = 1, #stalePending do
+		local item = stalePending[i]
+		pending[item.key] = nil
+		removedPending = removedPending + 1
+		SCLG_Diagnostics.stats().correlationUnmatched = SCLG_Diagnostics.stats().correlationUnmatched + 1
+		local details = "captureKey=" .. tostring(item.key) .. " ageMs="
+			.. tostring(now - (item.entry.registeredAt or now)) .. " reason=no_corpse_correlated_before_ttl"
+		SCLG_Diagnostics.recordSignal(item.entry, "CORRELATION", "PENDING_CORPSE_EXPIRED", details, true)
+		SCLG_RecoverySimulation.evaluate(item.entry, "UNMATCHED_CORPSE")
+	end
+	for i = 1, #staleReports do clientReports[staleReports[i]] = nil removedReports = removedReports + 1 end
+	for i = 1, #staleAmbiguities do ambiguousLoggedAt[staleAmbiguities[i]] = nil end
 	if (removedPending > 0 or removedReports > 0) and SCLG_Config.enableDebug() then
 		SCLG_Log.debug("CorpseAudit", "sweep removedPending=" .. removedPending .. " removedReports=" .. removedReports)
 	end
+	if removedPending > 0 then SCLG_Diagnostics.writeSummaryNow() end
+end
+
+---@return table
+function SCLG_CorpseAudit.gauges()
+	local pendingCount, reportCount, recheckCount = 0, 0, 0
+	for _ in pairs(pending) do pendingCount = pendingCount + 1 end
+	for _ in pairs(clientReports) do reportCount = reportCount + 1 end
+	for _ in pairs(groundRecheckQueue) do recheckCount = recheckCount + 1 end
+	return { pending = pendingCount, clientReports = reportCount, rechecks = recheckCount }
 end
 
 if Events.OnDeadBodySpawn then
