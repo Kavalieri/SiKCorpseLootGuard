@@ -1,0 +1,5 @@
+{
+	"IGUI_SCLG_CaseCandidate": "SCLG: posible pérdida detectada - revisa el cadáver, caso %1",
+	"IGUI_SCLG_CaseConfirmed": "SCLG: pérdida confirmada (%1 objeto(s)) - caso %2",
+	"IGUI_SCLG_CaseMoved": "SCLG: movimiento de objeto confirmado - caso %1"
+}

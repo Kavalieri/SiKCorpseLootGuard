@@ -68,6 +68,35 @@ local function snapshotScore(snap)
 	return #(snap.itemVisualTypes or {}) + #(snap.worn or {}) + #(snap.inventory or {}) + #(snap.attached or {})
 end
 
+local function observationOf(snap, reason, at)
+	return {
+		at = at,
+		reason = reason,
+		score = snapshotScore(snap),
+		visuals = #(snap.itemVisualTypes or {}),
+		inventory = #(snap.inventory or {}),
+		worn = #(snap.worn or {}),
+		outfitName = snap.outfitName,
+		persistentOutfitID = snap.persistentOutfitID,
+	}
+end
+
+local function appendObservation(timeline, observation)
+	timeline = timeline or {}
+	local previous = timeline[#timeline]
+	local changed = not previous or previous.score ~= observation.score
+		or tostring(previous.outfitName) ~= tostring(observation.outfitName)
+		or tostring(previous.persistentOutfitID) ~= tostring(observation.persistentOutfitID)
+	if changed then
+		timeline[#timeline + 1] = observation
+		if #timeline > 12 then table.remove(timeline, 1) end
+	else
+		previous.at = observation.at
+		previous.reason = observation.reason
+	end
+	return timeline
+end
+
 --- Captura (o recaptura) el estado actual de un zombie vivo.
 --- IMPORTANTE (confirmado con datos reales de pruebas): la captura por
 --- golpe (OnWeaponHitCharacter, "hit") se dispara MUCHAS veces durante el
@@ -108,6 +137,10 @@ function SCLG_Capture.capture(zombie, reason)
 
 	local existing = cache[key]
 	SCLG_Diagnostics.attachCase(snap, existing)
+	local timeline = appendObservation(existing and existing.captureTimeline or nil,
+		observationOf(snap, reason, now))
+	snap.captureTimeline = timeline
+	snap.latestCapture = timeline[#timeline]
 	if existing and existing.lastHitWeapon and not snap.lastHitWeapon then
 		snap.lastHitWeapon = existing.lastHitWeapon
 	end
@@ -115,6 +148,8 @@ function SCLG_Capture.capture(zombie, reason)
 		local existingScore = snapshotScore(existing)
 		local newScore = snapshotScore(snap)
 		if newScore < existingScore then
+			existing.captureTimeline = timeline
+			existing.latestCapture = timeline[#timeline]
 			SCLG_Log.debug("Capture", "captura mas pobre descartada, se conserva la anterior | key=" .. key
 				.. " existingScore=" .. existingScore .. " newScore=" .. newScore)
 			return

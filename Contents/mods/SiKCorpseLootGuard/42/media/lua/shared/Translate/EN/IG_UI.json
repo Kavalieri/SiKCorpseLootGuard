@@ -1,0 +1,5 @@
+{
+	"IGUI_SCLG_CaseCandidate": "SCLG: possible loss detected - check corpse case %1",
+	"IGUI_SCLG_CaseConfirmed": "SCLG: confirmed loss (%1 item(s)) - case %2",
+	"IGUI_SCLG_CaseMoved": "SCLG: item movement confirmed - case %1"
+}

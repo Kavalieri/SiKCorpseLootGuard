@@ -16,7 +16,7 @@ SCLG_Config = SCLG_Config or {}
 --- antes se repetia el numero como string suelto en varios sitios y se
 --- desincronizaba (visto: mod.info decia 0.1.2 y la consola anunciaba
 --- v0.1.1 porque el mensaje de carga tenia el numero escrito a mano).
-SCLG_Config.MOD_VERSION = "0.2.10"
+SCLG_Config.MOD_VERSION = "0.2.11"
 
 --- ID de modulo para sendClientCommand/Events.OnClientCommand (telemetria
 --- ligera de cliente, ver SCLG_ClientVisualReport.lua / SCLG_Server.lua).
@@ -39,7 +39,7 @@ end
 --- llegue OnDeadBodySpawn (o el respaldo de escaneo la encuentre) antes de
 --- darla por perdida (el cadaver pudo no llegar a crearse, chunk
 --- descargado, etc).
-SCLG_Config.CORPSE_AUDIT_TTL_MS = 20 * 1000
+SCLG_Config.CORPSE_AUDIT_TTL_MS = 45 * 1000
 
 --- Radio (en tiles) para correlacionar un IsoDeadBody con una entrada
 --- pendiente por POSICION, cuando no se puede correlacionar por online ID
@@ -49,12 +49,12 @@ SCLG_Config.CORPSE_MATCH_RADIUS_TILES = 3
 
 --- Cada cuanto (ms) se revisa el escaneo de respaldo de IsoDeadBody (ver
 --- SCLG_CorpseAudit.scanForUnauditedCorpses) - throttle general del barrido.
-SCLG_Config.CORPSE_SCAN_FALLBACK_INTERVAL_MS = 2000
+SCLG_Config.CORPSE_SCAN_FALLBACK_INTERVAL_MS = 1000
 
 --- Maximo de muertes pendientes cuyo entorno se inspecciona en cada pase
 --- del fallback. Cada entrada puede consultar hasta (radio*2+1)^2 casillas;
 --- el cursor rotatorio de CorpseAudit evita tanto picos como inanicion.
-SCLG_Config.CORPSE_SCAN_MAX_PENDING_PER_PASS = 8
+SCLG_Config.CORPSE_SCAN_MAX_PENDING_PER_PASS = 12
 
 --- Edad minima (ms) de una entrada "death stage" antes de que el escaneo de
 --- respaldo la considere - da tiempo de sobra a que Events.OnDeadBodySpawn
@@ -89,6 +89,25 @@ SCLG_Config.CLIENT_REPORT_TRACK_TTL_MS = 10 * 60 * 1000
 SCLG_Config.CLIENT_REPORT_MAX_TYPES = 128
 SCLG_Config.CLIENT_REPORT_MAX_BYTES = 12000
 SCLG_Config.CLIENT_REPORT_MAX_TYPE_BYTES = 256
+
+--- DEV4/DEV5 añaden descriptores de ItemVisual, resolución opcional contra
+--- InventoryItem cliente y huellas separadas. Se transportan en un
+--- segundo string plano con limites independientes: nunca se aceptan tablas
+--- anidadas ni payloads sin cota desde un cliente.
+SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTORS = 32
+SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTOR_BYTES = 48000
+SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTOR_FIELD_BYTES = 4096
+
+--- El servidor liga cada observacion a la posicion real del jugador que la
+--- envio. Un cliente fuera de este radio respecto al zombie que afirma ver no
+--- aporta evidencia de recuperacion (aunque el reporte simple de tipos siga
+--- siendo util para diagnostico).
+SCLG_Config.CLIENT_REPORT_OBSERVER_RADIUS_TILES = 35
+
+--- Compatibilidad espacial/temporal exigida a la muestra seleccionada para
+--- convertir CLIENT_ONLY_VISUAL en candidato recuperable en DRY RUN.
+SCLG_Config.CLIENT_RECOVERY_MAX_DEATH_DISTANCE_TILES = 3
+SCLG_Config.CLIENT_RECOVERY_MAX_REPORT_AGE_MS = 30000
 
 --- Tiempo (ms) tras el cual una entrada de la cache sin OnZombieDead
 --- asociado se considera huerfana (el zombie se alejo, se descargo el

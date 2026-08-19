@@ -48,6 +48,28 @@ local stats = {
 	recoveryWouldRestore = 0,
 	recoveryNeedsReview = 0,
 	recoveryWouldSkip = 0,
+	bodyEventsSeen = 0,
+	bodyEventsMatched = 0,
+	bodyEventsQueued = 0,
+	bodyEventsExpired = 0,
+	scanMatches = 0,
+	timelinesStarted = 0,
+	timelinesCompleted = 0,
+	timelinesBodyUnavailable = 0,
+	timelinesFailed = 0,
+	timelinesCancelled = 0,
+	timelineDuplicateRejected = 0,
+	bodyClaimDuplicateRejected = 0,
+	timelineCandidatesOpened = 0,
+	timelineCandidatesCancelled = 0,
+	timelineItemsConfirmed = 0,
+	timelineItemsMoved = 0,
+	timelineContradictions = 0,
+	clientVisualCandidates = 0,
+	clientVisualWouldRestore = 0,
+	clientVisualWouldSkip = 0,
+	clientVisualLateAddedItems = 0,
+	clientReportsLateLinked = 0,
 	signalCases = 0,
 	priority1 = 0,
 	priority2 = 0,
@@ -69,11 +91,16 @@ local PRIORITY = {
 	NAKED_VISUAL_BUT_PRESENT = 3,
 	AUTHENTICZ_INSTANCE_FAIL = 3,
 	OUTFIT_REPLACED = 4,
+	PROXIMITY_OUTFIT_MISMATCH = 4,
 	VISUAL_DELTA = 4,
 	CORPSE_CONTAINER_NEAR_CAPACITY = 4,
 	POST_ANIMATION_DELTA_NEARBY_PLAYER = 4,
 	UNMATCHED_CORPSE = 4,
 	PENDING_CORPSE_EXPIRED = 4,
+	ITEM_MOVED_AFTER_CORPSE = 4,
+	CONFIRMED_ITEM_REAPPEARED = 1,
+	CONFIRMED_ITEM_LATER_MOVED = 1,
+	TIMELINE_PROCESSING_FAILED = 2,
 }
 
 local function nowMs()
@@ -165,7 +192,7 @@ end
 function SCLG_Diagnostics.casePrefix(context, phase, category, priority)
 	local onlineID, persistentOutfitID, x, y, z = identityOf(context)
 	return string.format(
-		"schema=2 session=%s case=%s priority=P%d phase=%s category=%s origin=%s eventMs=%s onlineID=%s persistentOutfitID=%s pos=%s,%s,%s",
+		"schema=4 session=%s case=%s priority=P%d phase=%s category=%s origin=%s eventMs=%s onlineID=%s persistentOutfitID=%s pos=%s,%s,%s",
 		safeToken(sessionIdOf(context)), safeToken(caseIdOf(context)), priority or SCLG_Diagnostics.priorityFor(category),
 		safeToken(phase), safeToken(category), SCLG_Log.processTag(), tostring(nowMs()),
 		safeToken(onlineID), safeToken(persistentOutfitID), safeToken(x), safeToken(y), safeToken(z))
@@ -231,16 +258,36 @@ function SCLG_Diagnostics.summaryLine()
 		local ok, result = pcall(gaugeProvider)
 		if ok and type(result) == "table" then gauges = result end
 	end
+	local pendingDeaths = tonumber(gauges.pending) or 0
+	local terminalDeaths = stats.corpseAudits + stats.correlationUnmatched
+	local unaccountedDeaths = math.max(0, stats.deathsChecked - terminalDeaths - pendingDeaths)
+	local overaccountedDeaths = math.max(0, terminalDeaths + pendingDeaths - stats.deathsChecked)
+	local terminalPercent = stats.deathsChecked > 0 and (terminalDeaths * 100 / stats.deathsChecked) or 100
+	local activeTimelines = tonumber(gauges.rechecks) or 0
+	local terminalTimelines = stats.timelinesCompleted + stats.timelinesBodyUnavailable
+		+ stats.timelinesFailed + stats.timelinesCancelled
+	local unaccountedTimelines = math.max(0, stats.timelinesStarted - terminalTimelines - activeTimelines)
+	local overaccountedTimelines = math.max(0, terminalTimelines + activeTimelines - stats.timelinesStarted)
 	return string.format(
-		"schema=2 session=%s uptimeMs=%d snapshots=%d/%d deathsChecked=%d primaryLosses=%d primaryItemsMissing=%d corpseAudits=%d signalCases=%d priorities=P1:%d,P2:%d,P3:%d,P4:%d correlations=exact:%d,proximity:%d,ambiguous:%d,unmatched:%d postAnimationLosses=%d recovery=restore:%d,review:%d,skip:%d categories=%s cacheSize=%s pending=%s clientReports=%s rechecks=%s",
+		"schema=4 session=%s uptimeMs=%d snapshots=%d/%d deathsChecked=%d deathFlow=terminal:%d,inFlight:%d,unaccounted:%d,overaccounted:%d,terminalPct:%.2f primaryLosses=%d primaryItemsMissing=%d corpseAudits=%d signalCases=%d priorities=P1:%d,P2:%d,P3:%d,P4:%d correlations=exact:%d,proximity:%d,ambiguous:%d,unmatched:%d bodyEvents=seen:%d,matched:%d,queued:%d,expired:%d scanMatches:%d bodyClaims=tracked:%s,duplicateRejected:%d timeline=started:%d,completed:%d,bodyUnavailable:%d,failed:%d,cancelled:%d,active:%d,unaccounted:%d,overaccounted:%d,duplicateRejected:%d,opened:%d,candidatesCancelled:%d,confirmedItems:%d,movedItems:%d,contradictions:%d postAnimationLosses=%d recovery=restore:%d,review:%d,skip:%d clientVisualRecovery=candidates:%d,restore:%d,skip:%d,lateAdded:%d,lateReports:%d categories=%s cacheSize=%s pending=%s clientReports=%s rechecks=%s earlyBodies=%s",
 		sessionId, math.max(0, nowMs() - startedAtMs), stats.snapshotsHit,
-		stats.snapshotsHit + stats.snapshotsMissed, stats.deathsChecked, stats.lossesDetected,
+		stats.snapshotsHit + stats.snapshotsMissed, stats.deathsChecked, terminalDeaths, pendingDeaths,
+		unaccountedDeaths, overaccountedDeaths, terminalPercent, stats.lossesDetected,
 		stats.itemsMissing, stats.corpseAudits, stats.signalCases,
 		stats.priority1, stats.priority2, stats.priority3, stats.priority4,
 		stats.correlationExact, stats.correlationProximity, stats.correlationAmbiguous, stats.correlationUnmatched,
+		stats.bodyEventsSeen, stats.bodyEventsMatched, stats.bodyEventsQueued, stats.bodyEventsExpired, stats.scanMatches,
+		safeToken(gauges.bodyClaims), stats.bodyClaimDuplicateRejected,
+		stats.timelinesStarted, stats.timelinesCompleted, stats.timelinesBodyUnavailable,
+		stats.timelinesFailed, stats.timelinesCancelled, activeTimelines,
+		unaccountedTimelines, overaccountedTimelines, stats.timelineDuplicateRejected,
+		stats.timelineCandidatesOpened, stats.timelineCandidatesCancelled, stats.timelineItemsConfirmed,
+		stats.timelineItemsMoved, stats.timelineContradictions,
 		stats.postAnimationLosses, stats.recoveryWouldRestore, stats.recoveryNeedsReview, stats.recoveryWouldSkip,
+		stats.clientVisualCandidates, stats.clientVisualWouldRestore, stats.clientVisualWouldSkip,
+		stats.clientVisualLateAddedItems, stats.clientReportsLateLinked,
 		categoriesToken(), safeToken(gauges.cacheSize), safeToken(gauges.pending),
-		safeToken(gauges.clientReports), safeToken(gauges.rechecks))
+		safeToken(gauges.clientReports), safeToken(gauges.rechecks), safeToken(gauges.earlyBodies))
 end
 
 function SCLG_Diagnostics.writeSummaryNow()
@@ -250,6 +297,6 @@ function SCLG_Diagnostics.writeSummaryNow()
 end
 
 if SCLG_Sandbox.isModEnabled() then
-	SCLG_FileLog.appendCase("schema=2 session=" .. sessionId .. " phase=SESSION category=START origin="
+	SCLG_FileLog.appendCase("schema=4 session=" .. sessionId .. " phase=SESSION category=START origin="
 		.. SCLG_Log.processTag() .. " eventMs=" .. tostring(startedAtMs) .. " modVersion=" .. tostring(SCLG_Config.MOD_VERSION))
 end

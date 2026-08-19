@@ -65,6 +65,20 @@ function SCLG_Sandbox.getPostAnimationRecheckDelaySeconds()
 	return (v and v.PostAnimationRecheckDelaySeconds) or 15
 end
 
+---@return number
+function SCLG_Sandbox.getTimelineMaxSeconds()
+	local v = vars()
+	local seconds = (v and v.TimelineMaxSeconds) or 30
+	return math.max(15, tonumber(seconds) or 30)
+end
+
+---@return number
+function SCLG_Sandbox.getTimelineConfirmationSamples()
+	local v = vars()
+	local samples = (v and v.TimelineConfirmationSamples) or 2
+	return math.max(2, tonumber(samples) or 2)
+end
+
 ---@return boolean
 function SCLG_Sandbox.isAuthenticZProbeEnabled()
 	local v = vars()
@@ -75,6 +89,25 @@ end
 function SCLG_Sandbox.isNearbyPlayerCheckEnabled()
 	local v = vars()
 	return v == nil or v.EnableNearbyPlayerCheck ~= false
+end
+
+---@return boolean
+function SCLG_Sandbox.isMovementSearchEnabled()
+	local v = vars()
+	return v == nil or v.EnableMovementSearch ~= false
+end
+
+---@return number
+function SCLG_Sandbox.getMovementSearchRadiusTiles()
+	local v = vars()
+	local radius = (v and v.MovementSearchRadiusTiles) or 5
+	return math.max(1, tonumber(radius) or 5)
+end
+
+---@return boolean
+function SCLG_Sandbox.showCaseNotifications()
+	local v = vars()
+	return v == nil or v.ShowCaseNotifications ~= false
 end
 
 ---@return boolean

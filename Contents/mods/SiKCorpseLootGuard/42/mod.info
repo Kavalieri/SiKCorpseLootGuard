@@ -1,8 +1,8 @@
 name=SiK Corpse Loot Guard [42.20+]
 id=SiKCorpseLootGuard
-description=Build 42.20+ v0.2.10 (diagnostico). Correlaciona cliente, muerte, cadaver y recheck con IDs de sesion/caso, y simula en seco que podria restaurarse. No crea, borra, mueve ni restaura ningun objeto.
+description=Build 42.20+ v0.2.11 (solo diagnostico). Integra muestras cliente tardias, separa composicion/apariencia/estado y asigna cada cadaver a un solo caso. Simula recuperacion en seco; no crea, borra, mueve ni restaura ningun objeto.
 poster=poster.png
 icon=icon.png
 author=SiK
-modversion=0.2.10
+modversion=0.2.11
 versionMin=42.19.0

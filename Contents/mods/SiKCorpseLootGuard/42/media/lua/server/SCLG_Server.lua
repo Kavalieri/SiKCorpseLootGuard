@@ -248,8 +248,11 @@ local function onZombieDead(zombie)
 	SCLG_CorpseAudit.registerDeathStage(pre, post, zombie)
 	SCLG_Diagnostics.recordStage({ pre = pre, death = post, onlineID = post.onlineID,
 		x = post.x, y = post.y, z = post.z }, "DEATH", "DEATH_CAPTURED", string.format(
-		"snapshotFound=%s captureReason=%s captureCount=%s ageFromFirstCaptureMs=%s preVisuals=%d deathInventory=%d deathVisuals=%d",
-		tostring(snapshotFound), tostring(pre.reason), tostring(pre.captureCount), tostring(nowMs() - (pre.firstCapturedAt or nowMs())),
+		"snapshotFound=%s captureReason=%s captureCount=%s captureTransitions=%s latestCaptureScore=%s latestCaptureOutfit=%s ageFromFirstCaptureMs=%s preVisuals=%d deathInventory=%d deathVisuals=%d",
+		tostring(snapshotFound), tostring(pre.reason), tostring(pre.captureCount),
+		tostring(#(pre.captureTimeline or {})), tostring(pre.latestCapture and pre.latestCapture.score or "?"),
+		tostring(pre.latestCapture and pre.latestCapture.outfitName or "?"),
+		tostring(nowMs() - (pre.firstCapturedAt or nowMs())),
 		#(pre.itemVisualTypes or {}), #(post.inventory or {}), #(post.itemVisualTypes or {})))
 
 	-- fullTypes en crudo, para el log detallado (ver punto 3 del pivote:
@@ -540,6 +543,11 @@ end
 ---@param command string
 ---@param player any
 ---@param args table
+local function finitePayloadNumber(value, absoluteLimit)
+	return type(value) == "number" and value == value
+		and math.abs(value) <= (absoluteLimit or 10000000)
+end
+
 local function onClientCommand(module, command, player, args)
 	if module ~= SCLG_Config.MOD_ID then
 		return
@@ -565,14 +573,82 @@ local function onClientCommand(module, command, player, args)
 				types[#types + 1] = t
 			end
 		end
+		local rawDescriptors = type(args.descriptors) == "string" and args.descriptors or ""
+		if #rawDescriptors > SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTOR_BYTES then
+			SCLG_Log.warn("Network", "clientVisualReport rechazado: descriptores demasiado grandes bytes="
+				.. tostring(#rawDescriptors))
+			return
+		end
+		local descriptors = {}
+		local serverHashes = {}
+		local descriptorComplete, descriptorEligible = 0, 0
+		if rawDescriptors ~= "" then
+			local decoded, decodeError = SCLG_Snapshot.decodeVisualEvidence(rawDescriptors,
+				SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTORS,
+				SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTOR_FIELD_BYTES)
+			if not decoded then
+				SCLG_Log.warn("Network", "clientVisualReport rechazado: descriptor invalido reason="
+					.. tostring(decodeError))
+				return
+			end
+			descriptors = decoded
+			if #descriptors ~= #types then
+				SCLG_Log.warn("Network", "clientVisualReport rechazado: tipos/descriptores no coinciden types="
+					.. tostring(#types) .. " descriptors=" .. tostring(#descriptors))
+				return
+			end
+			local typeCopy, descriptorTypeCopy = {}, {}
+			for i = 1, #types do typeCopy[i] = types[i] end
+			for i = 1, #descriptors do descriptorTypeCopy[i] = tostring(descriptors[i].fullType or "?") end
+			table.sort(typeCopy)
+			table.sort(descriptorTypeCopy)
+			for i = 1, #typeCopy do
+				if typeCopy[i] ~= descriptorTypeCopy[i] then
+					SCLG_Log.warn("Network", "clientVisualReport rechazado: fullType descriptor no coincide")
+					return
+				end
+			end
+			serverHashes = SCLG_Snapshot.visualEvidenceHashes(descriptors)
+			local serverSampleHash = serverHashes.full
+			if type(args.sampleHash) ~= "string" or #args.sampleHash > 32
+				or args.sampleHash ~= serverSampleHash then
+				SCLG_Log.warn("Network", "clientVisualReport rechazado: sampleHash no coincide")
+				return
+			end
+			for _, hashField in ipairs({ "compositionHash", "appearanceHash", "stateHash" }) do
+				local expected = serverHashes[string.gsub(hashField, "Hash$", "")]
+				if type(args[hashField]) ~= "string" or #args[hashField] > 32
+					or args[hashField] ~= expected then
+					SCLG_Log.warn("Network", "clientVisualReport rechazado: " .. hashField .. " no coincide")
+					return
+				end
+			end
+			descriptorComplete, descriptorEligible = SCLG_Snapshot.assessClientVisualEvidence(descriptors)
+		elseif args.sampleHash ~= nil or args.compositionHash ~= nil
+			or args.appearanceHash ~= nil or args.stateHash ~= nil then
+			return
+		end
 		local allowedKinds = { preHit = true, periodic = true, death = true }
 		if not allowedKinds[args.kind] then return end
 		local observedBy = "?"
 		local observerSteamID = "?"
+		local observerX, observerY, observerZ = nil, nil, nil
 		pcall(function()
 			observedBy = player and player:getUsername() or "?"
 			if player and player.getSteamID then observerSteamID = tostring(player:getSteamID()) end
+			if player then observerX, observerY, observerZ = player:getX(), player:getY(), player:getZ() end
 		end)
+		local reportX = finitePayloadNumber(args.x) and args.x or nil
+		local reportY = finitePayloadNumber(args.y) and args.y or nil
+		local reportZ = finitePayloadNumber(args.z, 10000) and args.z or nil
+		local observerClaimDistance = math.huge
+		local observerWithinClaim = false
+		if observerX ~= nil and observerY ~= nil and reportX ~= nil and reportY ~= nil
+			and math.floor(observerZ or 0) == math.floor(reportZ or 0) then
+			local dx, dy = observerX - reportX, observerY - reportY
+			observerClaimDistance = math.sqrt(dx * dx + dy * dy)
+			observerWithinClaim = observerClaimDistance <= SCLG_Config.CLIENT_REPORT_OBSERVER_RADIUS_TILES
+		end
 		SCLG_CorpseAudit.reportClientVisual(args.onlineID, types, {
 			kind = args.kind,
 			outfitName = type(args.outfitName) == "string" and args.outfitName:sub(1, 256) or nil,
@@ -580,9 +656,17 @@ local function onClientCommand(module, command, player, args)
 			observedBy = tostring(observedBy),
 			observerSteamID = observerSteamID,
 			reportedAtClientMs = type(args.reportedAtClientMs) == "number" and args.reportedAtClientMs or nil,
-			x = type(args.x) == "number" and args.x or nil,
-			y = type(args.y) == "number" and args.y or nil,
-			z = type(args.z) == "number" and args.z or nil,
+			x = reportX, y = reportY, z = reportZ,
+			observerX = observerX, observerY = observerY, observerZ = observerZ,
+			observerClaimDistance = observerClaimDistance,
+			observerWithinClaim = observerWithinClaim,
+			descriptors = descriptors,
+			sampleHash = serverHashes.full,
+			compositionHash = serverHashes.composition,
+			appearanceHash = serverHashes.appearance,
+			stateHash = serverHashes.state,
+			descriptorComplete = descriptorComplete,
+			descriptorEligible = descriptorEligible,
 		})
 	elseif command == "spawnAttempt" then
 		-- Registro de un spawn de prueba pedido desde el menu SCLG Spawn
@@ -613,6 +697,8 @@ SCLG_Diagnostics.setGaugeProvider(function()
 		pending = audit.pending,
 		clientReports = audit.clientReports,
 		rechecks = audit.rechecks,
+		earlyBodies = audit.earlyBodies,
+		bodyClaims = audit.bodyClaims,
 	}
 end)
 

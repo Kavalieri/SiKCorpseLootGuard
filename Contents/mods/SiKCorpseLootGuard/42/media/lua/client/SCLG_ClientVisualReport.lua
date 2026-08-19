@@ -13,10 +13,9 @@
 	en el CLIENTE, el modelo ya habia pasado a cadaver vacio (la
 	transicion de zombie->cadaver ya habia ocurrido visualmente) - el
 	reporte llegaba sistematicamente demasiado tarde para ese patron de
-	perdida en concreto. Ahora se reporta en 3 momentos, cada uno guardando
-	solo si aporta MAS prendas que lo ya reportado (ver
-	SCLG_CorpseAudit.reportClientVisual, mismo criterio "conservar lo mas
-	rico" que ya usa la captura de servidor):
+	perdida en concreto. Ahora se reporta en 3 momentos; el servidor conserva
+	tanto la muestra mas rica como un historial plano y acotado para comprobar
+	que dos momentos distintos describen exactamente el mismo conjunto:
 	  1. "preHit" - primer OnWeaponHitCharacter contra ese zombie (el
 	     momento mas fiable: el zombie sigue vivo y vestido con seguridad).
 	  2. "periodic" - respaldo muestreado de zombies cercanos sin golpe
@@ -84,17 +83,42 @@ end
 ---@param zombie any
 ---@param onlineID number
 ---@param kind string "preHit"|"periodic"|"death"
-local function sendReport(zombie, onlineID, kind)
-	local types = SCLG_Snapshot.visualTypesOnly(zombie)
+---@param observer any|nil
+---@return boolean sent
+local function sendReport(zombie, onlineID, kind, observer)
+	-- El descriptor es bastante mas rico que la lista historica de tipos. Solo
+	-- se construye y transmite cuando el DRY RUN esta habilitado; con la
+	-- simulacion apagada se conserva el trafico ligero anterior.
+	local descriptors = {}
+	if SCLG_Sandbox.isRecoverySimulationEnabled() then
+		descriptors = SCLG_Snapshot.visualEvidenceOnly(zombie)
+	end
+	local types = #descriptors > 0 and SCLG_Snapshot.visualEvidenceTypes(descriptors)
+		or SCLG_Snapshot.visualTypesOnly(zombie)
+	local descriptorPayload = #descriptors > 0 and SCLG_Snapshot.encodeVisualEvidence(descriptors) or ""
+	local hashes = #descriptors > 0 and SCLG_Snapshot.visualEvidenceHashes(descriptors) or {}
+	local sampleHash = hashes.full
+	if #descriptors > SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTORS
+		or #descriptorPayload > SCLG_Config.CLIENT_REPORT_MAX_DESCRIPTOR_BYTES then
+		SCLG_Log.warn("ClientVisualReport", "descriptores omitidos por limite | onlineID="
+			.. tostring(onlineID) .. " count=" .. tostring(#descriptors)
+			.. " bytes=" .. tostring(#descriptorPayload))
+		descriptorPayload = ""
+		sampleHash = nil
+		hashes = {}
+	end
 	-- Un death vacio tambien es informacion: permite distinguir en servidor
 	-- "el cliente vio 0" de "no llego ningun reporte del cliente". Los barridos
 	-- periodicos/preHit vacios se omiten para no generar trafico sin valor.
 	if #types == 0 and kind ~= "death" then
-		return
+		return false
 	end
-	local player = (getSpecificPlayer and getSpecificPlayer(0)) or (getPlayer and getPlayer())
+	-- El emisor/observador debe ser el jugador local de esta conexión. El
+	-- atacante del evento puede ser otro IsoPlayer replicado y no es una
+	-- identidad válida para sendClientCommand.
+	local player = (getSpecificPlayer and getSpecificPlayer(0)) or (getPlayer and getPlayer()) or observer
 	if not player then
-		return
+		return false
 	end
 	local okOutfit, outfitName = pcall(function() return zombie.getOutfitName and zombie:getOutfitName() end)
 	local okPersistent, persistentOutfitID = pcall(function()
@@ -108,6 +132,11 @@ local function sendReport(zombie, onlineID, kind)
 	local ok = pcall(sendClientCommand, player, SCLG_Config.MOD_ID, "clientVisualReport", {
 		onlineID = onlineID,
 		types = table.concat(types, "|"),
+		descriptors = descriptorPayload,
+		sampleHash = sampleHash,
+		compositionHash = hashes.composition,
+		appearanceHash = hashes.appearance,
+		stateHash = hashes.state,
 		kind = kind,
 		outfitName = (okOutfit and outfitName) and tostring(outfitName) or nil,
 		persistentOutfitID = (okPersistent and persistentOutfitID) and tostring(persistentOutfitID) or nil,
@@ -119,6 +148,7 @@ local function sendReport(zombie, onlineID, kind)
 	})
 	if not ok then
 		SCLG_Log.warn("ClientVisualReport", "sendClientCommand (clientVisualReport) fallo")
+		return false
 	else
 		local announced = announcedReports[onlineID]
 		local shouldAnnounce = kind ~= "periodic"
@@ -126,15 +156,25 @@ local function sendReport(zombie, onlineID, kind)
 		if shouldAnnounce then
 			SCLG_Log.info("ClientVisual", "report sent | onlineID=" .. tostring(onlineID)
 				.. " kind=" .. tostring(kind) .. " visuals=" .. tostring(#types)
+				.. " descriptors=" .. tostring(#descriptors) .. " sampleHash=" .. tostring(sampleHash)
+				.. " compositionHash=" .. tostring(hashes.composition)
+				.. " appearanceHash=" .. tostring(hashes.appearance)
+				.. " stateHash=" .. tostring(hashes.state)
 				.. " pos=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
 			announcedReports[onlineID] = { count = #types, at = nowMs() }
 		end
 		if SCLG_Config.enableDebug() then
 			SCLG_Log.debug("ClientVisualReport", "sent onlineID=" .. tostring(onlineID)
 				.. " kind=" .. tostring(kind) .. " types=" .. tostring(#types)
+				.. " descriptors=" .. tostring(#descriptors) .. " descriptorBytes=" .. tostring(#descriptorPayload)
+				.. " sampleHash=" .. tostring(sampleHash)
+				.. " compositionHash=" .. tostring(hashes.composition)
+				.. " appearanceHash=" .. tostring(hashes.appearance)
+				.. " stateHash=" .. tostring(hashes.state)
 				.. " pos=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
 		end
 	end
+	return true
 end
 
 local function sweepTrackingIfDue(now)
@@ -180,7 +220,11 @@ local function onWeaponHitCharacter(attacker, victim)
 		return
 	end
 	hitReported[onlineID] = now
-	sendReport(victim, onlineID, "preHit")
+	local observer = nil
+	pcall(function()
+		if attacker and instanceof(attacker, "IsoPlayer") then observer = attacker end
+	end)
+	sendReport(victim, onlineID, "preHit", observer)
 end
 
 --- Muestreo de respaldo: zombies cercanos que TODAVIA no han recibido
@@ -223,13 +267,15 @@ local function periodicScan()
 		local okGet, zombie = pcall(function() return zombies:get(i) end)
 		if okGet and zombie then
 			local onlineID = onlineIdOf(zombie)
-			if onlineID and not hitReported[onlineID] and not periodicReported[onlineID] then
+			local lastPeriodic = onlineID and periodicReported[onlineID] or nil
+			if onlineID and not hitReported[onlineID]
+				and (not lastPeriodic or (now - lastPeriodic) >= 30000) then
 				local okPos, zx, zy = pcall(function() return zombie:getX(), zombie:getY() end)
 				if okPos then
 					local dx, dy = zx - px, zy - py
 					if (dx * dx + dy * dy) <= radius2 then
 						periodicReported[onlineID] = now
-						sendReport(zombie, onlineID, "periodic")
+						sendReport(zombie, onlineID, "periodic", player)
 						budget = budget - 1
 					end
 				end

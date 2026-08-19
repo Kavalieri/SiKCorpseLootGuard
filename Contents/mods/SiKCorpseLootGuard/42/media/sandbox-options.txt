@@ -66,12 +66,58 @@ option SiKCorpseLootGuard.PostAnimationRecheckDelaySeconds
 	translation = SiKCorpseLootGuard_PostAnimationRecheckDelaySeconds,
 }
 
+option SiKCorpseLootGuard.TimelineMaxSeconds
+{
+	type = integer,
+	default = 30,
+	min = 15,
+	max = 120,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_TimelineMaxSeconds,
+}
+
+option SiKCorpseLootGuard.TimelineConfirmationSamples
+{
+	type = integer,
+	default = 2,
+	min = 2,
+	max = 5,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_TimelineConfirmationSamples,
+}
+
 option SiKCorpseLootGuard.EnableNearbyPlayerCheck
 {
 	type = boolean,
 	default = true,
 	page = SiKCorpseLootGuard,
 	translation = SiKCorpseLootGuard_EnableNearbyPlayerCheck,
+}
+
+option SiKCorpseLootGuard.EnableMovementSearch
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_EnableMovementSearch,
+}
+
+option SiKCorpseLootGuard.MovementSearchRadiusTiles
+{
+	type = integer,
+	default = 5,
+	min = 1,
+	max = 15,
+	page = SiKCorpseLootGuard_Debug,
+	translation = SiKCorpseLootGuard_MovementSearchRadiusTiles,
+}
+
+option SiKCorpseLootGuard.ShowCaseNotifications
+{
+	type = boolean,
+	default = true,
+	page = SiKCorpseLootGuard,
+	translation = SiKCorpseLootGuard_ShowCaseNotifications,
 }
 
 option SiKCorpseLootGuard.EnableCapacityDiagnostic
