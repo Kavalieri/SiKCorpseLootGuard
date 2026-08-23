@@ -718,7 +718,17 @@ local function collectItemVisualEvidence(obj)
 			desc.hue = safeCall(entry, "getHue")
 			desc.baseTexture = safeCall(entry, "getBaseTexture")
 			desc.textureChoice = safeCall(entry, "getTextureChoice")
-			desc.decal = safeCall(entry, "getDecal")
+			-- getDecal() confirmado en pruebas reales (2026-08-22, servidor de
+			-- pruebas): la firma real exige un indice ("expected 1 argument,
+			-- got 0"), no es sin-argumentos como el resto de getters de este
+			-- bloque. pcall en safeCall evita romper Lua, pero el motor vuelca
+			-- igualmente la traza Java completa a consola (misma leccion que
+			-- getLastStandString, comentario mas abajo) - decenas de veces por
+			-- minuto durante el escaneo periodico. El indice del decal no es
+			-- necesario para el diagnostico (solo compara perdida de items, no
+			-- arte de decal), asi que se deja sin llamar en vez de adivinar el
+			-- indice correcto.
+			desc.decal = nil
 			desc.totalBlood = safeCall(entry, "getTotalBlood")
 			desc.holes = safeCall(entry, "getHolesNumber")
 			desc.patches = safeCall(entry, "getBasicPatchesNumber")
