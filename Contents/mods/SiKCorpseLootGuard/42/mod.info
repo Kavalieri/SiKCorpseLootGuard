@@ -1,8 +1,8 @@
 name=SiK Corpse Loot Guard
 id=SiKCorpseLootGuard
-description=Build 42.20+ v0.2.12 (solo diagnostico). Corrige spam de error Java "expected 1 argument, got 0" en getDecal() durante el escaneo periodico. Simula recuperacion en seco; no crea, borra, mueve ni restaura ningun objeto.
+description=Build 42.20+ v0.2.12-dev1.2 (solo diagnostico). Corrige spam de error Java "expected 1 argument, got 0" en getDecal() durante el escaneo periodico. Simula recuperacion en seco; no crea, borra, mueve ni restaura ningun objeto.
 poster=poster.png
 icon=icon.png
 author=SiK
-modversion=0.2.12
-versionMin=42.19.0
+modversion=0.2.12-dev1.2
+versionMin=42.20.0

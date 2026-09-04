@@ -20,6 +20,7 @@ require "SCLG_Config"
 require "SCLG_Log"
 require "SCLG_Snapshot"
 require "SCLG_Diagnostics"
+require "SCLGSiK_API"
 
 -- media/lua/server/ NO filtra la carga en B42. Usar la misma fuente de
 -- autoridad que el orquestador: SP real tambien debe cargar este modulo.
@@ -157,6 +158,20 @@ function SCLG_Capture.capture(zombie, reason)
 	end
 
 	cache[key] = snap
+	local fingerprint = nil
+	if SCLGSiK and SCLGSiK.API and SCLGSiK.API.Snapshot then
+		fingerprint = SCLGSiK.API.Snapshot.fingerprint(snap)
+	end
+	SCLGSiK.emitDiagnosticEvent("snapshot-captured", {
+		caseId = snap.caseId,
+		captureKey = key,
+		reason = reason,
+		fingerprint = fingerprint,
+		worn = #snap.worn,
+		inventory = #snap.inventory,
+		attached = #snap.attached,
+		visuals = #snap.itemVisualTypes,
+	})
 
 	SCLG_Log.debug("Capture", "captured key=" .. key .. " reason=" .. tostring(reason)
 		.. " session=" .. tostring(snap.sessionId) .. " case=" .. tostring(snap.caseId)

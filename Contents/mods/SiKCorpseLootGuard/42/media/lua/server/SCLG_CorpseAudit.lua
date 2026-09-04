@@ -38,6 +38,7 @@ require "SCLG_Diagnostics"
 require "SCLG_RecoverySimulation"
 require "SCLG_ItemLocator"
 require "SCLG_CaseNotificationServer"
+require "SCLGSiK_API"
 
 -- media/lua/server/ NO filtra la carga en B42. Usar la misma fuente de
 -- autoridad que el orquestador: SP real tambien debe cargar este modulo.
@@ -748,6 +749,18 @@ local function auditCorpse(entry, corpse, correlation, sourceLabel)
 	if not category then
 		SCLG_Diagnostics.recordStage(entry, "CORPSE", "OK", auditDetails)
 	end
+	SCLGSiK.emitDiagnosticEvent("audit-completed", {
+		caseId = entry.caseId,
+		onlineID = entry.onlineID,
+		category = category or "OK",
+		source = sourceLabel,
+		correlation = correlation.method,
+		confidence = correlation.confidence,
+		preVisuals = preVisualCount,
+		deathInventory = deathTotal,
+		corpseInventory = corpseTotal,
+		corpseVisuals = corpseVisualCount,
+	})
 	if entry.onlineID and category ~= "CLIENT_ONLY_VISUAL" then clientReports[entry.onlineID] = nil end
 end
 

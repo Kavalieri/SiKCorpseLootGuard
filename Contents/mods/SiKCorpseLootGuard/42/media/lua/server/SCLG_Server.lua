@@ -23,6 +23,7 @@ require "SCLG_FileLog"
 require "SCLG_Diagnostics"
 require "SCLG_CorpseAudit"
 require "SCLG_RecoverySimulation"
+require "SCLGSiK_API"
 
 -- IMPORTANTE: en B42, la carpeta media/lua/server/ es solo organizativa -
 -- el motor carga estos ficheros en TODOS los procesos (servidor dedicado,
@@ -246,6 +247,14 @@ local function onZombieDead(zombie)
 	-- (Events.OnDeadBodySpawn) - el IsoZombie que auditamos aqui NO es el
 	-- objeto final que ve el jugador. Ver SCLG_CorpseAudit.lua.
 	SCLG_CorpseAudit.registerDeathStage(pre, post, zombie)
+	SCLGSiK.emitDiagnosticEvent("case-opened", {
+		caseId = post.caseId,
+		onlineID = post.onlineID,
+		snapshotFound = snapshotFound,
+		x = post.x,
+		y = post.y,
+		z = post.z,
+	})
 	SCLG_Diagnostics.recordStage({ pre = pre, death = post, onlineID = post.onlineID,
 		x = post.x, y = post.y, z = post.z }, "DEATH", "DEATH_CAPTURED", string.format(
 		"snapshotFound=%s captureReason=%s captureCount=%s captureTransitions=%s latestCaptureScore=%s latestCaptureOutfit=%s ageFromFirstCaptureMs=%s preVisuals=%d deathInventory=%d deathVisuals=%d",
