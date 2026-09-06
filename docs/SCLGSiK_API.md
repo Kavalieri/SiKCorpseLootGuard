@@ -25,7 +25,7 @@ subscriptions return a disposable token or `nil, errorCode`.
 ```lua
 {
     api = "SCLGSiK.API",
-    apiVersion = "1.0.0-dev1",
+    apiVersion = "1.0.0",
     productVersion = "<runtime product version>",
     diagnosticOnly = true,
     capabilities = {

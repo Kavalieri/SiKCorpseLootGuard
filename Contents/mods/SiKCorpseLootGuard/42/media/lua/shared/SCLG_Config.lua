@@ -16,7 +16,7 @@ SCLG_Config = SCLG_Config or {}
 --- antes se repetia el numero como string suelto en varios sitios y se
 --- desincronizaba (visto: mod.info decia 0.1.2 y la consola anunciaba
 --- v0.1.1 porque el mensaje de carga tenia el numero escrito a mano).
-SCLG_Config.MOD_VERSION = "0.2.12-dev1.2"
+SCLG_Config.MOD_VERSION = "0.2.12"
 
 --- ID de modulo para sendClientCommand/Events.OnClientCommand (telemetria
 --- ligera de cliente, ver SCLG_ClientVisualReport.lua / SCLG_Server.lua).

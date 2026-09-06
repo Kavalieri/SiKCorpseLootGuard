@@ -4,7 +4,7 @@ SCLGSiK = SCLGSiK or {}
 SCLGSiK.API = SCLGSiK.API or {}
 
 local API = SCLGSiK.API
-local API_VERSION = "1.0.0-dev1"
+local API_VERSION = "1.0.0"
 local MAX_ITEMS = 256
 local MAX_TEXT_BYTES = 512
 local MAX_DEPTH = 6
