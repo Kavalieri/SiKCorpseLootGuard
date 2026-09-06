@@ -35,7 +35,7 @@ option SiKCorpseLootGuard.EnableRecoverySimulation
 option SiKCorpseLootGuard.EnableConsoleLog
 {
 	type = boolean,
-	default = true,
+	default = false,
 	page = SiKCorpseLootGuard_Debug,
 	translation = SiKCorpseLootGuard_EnableConsoleLog,
 }
@@ -43,7 +43,7 @@ option SiKCorpseLootGuard.EnableConsoleLog
 option SiKCorpseLootGuard.RelayServerLogsToClients
 {
 	type = boolean,
-	default = true,
+	default = false,
 	page = SiKCorpseLootGuard_Debug,
 	translation = SiKCorpseLootGuard_RelayServerLogsToClients,
 }
@@ -172,13 +172,6 @@ option SiKCorpseLootGuard.SummaryIntervalMinutes
 	translation = SiKCorpseLootGuard_SummaryIntervalMinutes,
 }
 
-option SiKCorpseLootGuard.VerboseDebug
-{
-	type = boolean,
-	default = false,
-	page = SiKCorpseLootGuard_Debug,
-	translation = SiKCorpseLootGuard_VerboseDebug,
-}
 
 option SiKCorpseLootGuard.ClientVisualScanIntervalSeconds
 {

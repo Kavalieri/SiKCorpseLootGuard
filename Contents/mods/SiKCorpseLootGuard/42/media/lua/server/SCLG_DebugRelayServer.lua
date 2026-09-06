@@ -42,6 +42,11 @@ local function usernameOf(player)
 	return nil
 end
 
+local function isAdmin(player)
+	local ok, level = pcall(function() return player and player:getAccessLevel() end)
+	return ok and level == "admin"
+end
+
 local function recipients()
 	local result, seen = {}, {}
 	local players = getOnlinePlayers and getOnlinePlayers()
@@ -49,7 +54,7 @@ local function recipients()
 		for i = 0, players:size() - 1 do
 			local player = players:get(i)
 			local username = usernameOf(player)
-			if username and subscribers[username] then
+			if username and subscribers[username] == player and isAdmin(player) then
 				result[#result + 1] = player
 				seen[username] = true
 			end
@@ -91,9 +96,10 @@ local function flush()
 		clearQueue()
 		return
 	end
-	if head > tail and dropped == 0 then return end
+	if not hasSubscribers() then clearQueue() return end
 	local target = recipients()
 	if #target == 0 then clearQueue() return end
+	if head > tail and dropped == 0 then return end
 	local payload = takeBatch()
 	for i = 1, #target do pcall(sendServerCommand, target[i], MODULE, "batch", { payload = payload }) end
 end
@@ -102,7 +108,13 @@ local function onClientCommand(module, command, player, args)
 	if module ~= MODULE or command ~= "subscribe" then return end
 	local username = usernameOf(player)
 	if not username then return end
-	if enabled() and args and args.enabled == true then subscribers[username] = true else subscribers[username] = nil end
+	-- Binding to this actual session prevents username/onlineId reuse after reconnect.
+	-- recipients() releases disconnected/revoked references every 250 ms.
+	if enabled() and args and args.enabled == true and isAdmin(player) then
+		subscribers[username] = player
+	else
+		subscribers[username] = nil
+	end
 end
 
 Events.OnClientCommand.Add(onClientCommand)

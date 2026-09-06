@@ -44,13 +44,13 @@ end
 ---@return boolean
 function SCLG_Sandbox.isConsoleLogEnabled()
 	local v = vars()
-	return v == nil or v.EnableConsoleLog ~= false
+	return v ~= nil and v.EnableConsoleLog == true
 end
 
 ---@return boolean
 function SCLG_Sandbox.relayServerLogsToClients()
 	local v = vars()
-	return v == nil or v.RelayServerLogsToClients ~= false
+	return v ~= nil and v.RelayServerLogsToClients == true
 end
 
 ---@return boolean
@@ -144,8 +144,8 @@ end
 
 ---@return boolean
 function SCLG_Sandbox.isVerboseDebug()
-	local v = vars()
-	return v and v.VerboseDebug == true
+	-- Legacy verbosity is retired; capture/file-log mechanics are unchanged.
+	return false
 end
 
 --- Cada cuanto (ms) el cliente muestrea zombies cercanos sin golpe todavia
