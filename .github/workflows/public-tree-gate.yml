@@ -8,7 +8,7 @@ jobs:
   public-tree:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate publishable index
         shell: pwsh
         run: ./tools/check-public-tree.ps1

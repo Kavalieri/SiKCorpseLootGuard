@@ -28,7 +28,7 @@ try {
     }
 
     $secretPattern = 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{24,}|xox[baprs]-[A-Za-z0-9-]{20,}'
-    $secretHits = & git grep --cached -I -n -E $secretPattern -- . ':(exclude)tools/check-public-tree.ps1' 2>$null
+    $secretHits = & git grep --cached -I -l -E $secretPattern -- . ':(exclude)tools/check-public-tree.ps1' 2>$null
     $grepCode = $LASTEXITCODE
     if ($grepCode -eq 0) {
         Write-Error ("Apparent secret material in index:" + [Environment]::NewLine + ($secretHits -join [Environment]::NewLine))
@@ -36,6 +36,9 @@ try {
     if ($grepCode -gt 1) { throw "git grep failed with exit code $grepCode" }
 
     Write-Host "PUBLIC_TREE_GATE PASS: $($tracked.Count) tracked paths checked."
+    # grep returns 1 for no matches; the Actions pwsh epilogue propagates it.
+    # Only a fully successful validation clears that native-process status.
+    $global:LASTEXITCODE = 0
 }
 finally {
     Pop-Location
